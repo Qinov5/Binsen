@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.qinov5.binsen</string>
+	<key>CFBundleName</key>
+	<string>Binsen</string>
+	<key>CFBundleDisplayName</key>
+	<string>Binsen</string>
+	<key>CFBundleExecutable</key>
+	<string>Binsen</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.3.0</string>
+	<key>CFBundleVersion</key>
+	<string>3</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>系统服务不可用时，用来在便笺里新建一张并粘贴文字。</string>
+</dict>
+</plist>
