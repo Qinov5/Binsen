@@ -35,7 +35,7 @@ iPhone 快捷指令「Binsen」
 
 | 系统版本 | 在哪里授权 |
 |---|---|
-| macOS 27.3 及以后 | 弹窗里点 **Choose Apps**，只勾选「便笺」；或 系统设置 → 隐私与安全性 → System & App Protection Override |
+| macOS 27.3 及以后 | 弹窗里点 **Choose Apps**，只添加「便笺」，并把它右边改成 **At Any Time**（选 Ask First 的话每次都会弹窗确认）；之后也可以在 系统设置 → 隐私与安全性 → System & App Protection Override 里修改 |
 | 更早的版本 | 系统设置 → 隐私与安全性 → 辅助功能（macOS 27 早期版本叫 Device Control and Data Access），打开 Binsen |
 
 不授权也能用：会改用系统服务新建便笺，此时便笺会被调到前台，便笺没打开时可能多出一张空白便笺。
@@ -156,7 +156,7 @@ Or build it yourself with two actions:
 
 **Logs:** `~/Library/Logs/Binsen.log` · **Uninstall:** `zsh uninstall.sh`
 
-**Permission (recommended).** Allow Binsen to control the Stickies app only (macOS 27.3+: click *Choose Apps* and pick Stickies; earlier versions: Privacy & Security → Accessibility). Binsen then creates the note through Stickies' own *New Note* menu and types into it, so Stickies never steals focus and no blank note is left behind when Stickies wasn't running. Without it, Binsen falls back to the `Make Sticky` service.
+**Permission (recommended).** Allow Binsen to control the Stickies app only (macOS 27.3+: click *Choose Apps*, add Stickies and set it to *At Any Time*; earlier versions: Privacy & Security → Accessibility). Binsen then creates the note through Stickies' own *New Note* menu and types into it, so Stickies never steals focus and no blank note is left behind when Stickies wasn't running. Without it, Binsen falls back to the `Make Sticky` service.
 
 ## License
 

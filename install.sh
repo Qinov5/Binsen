@@ -89,7 +89,7 @@ if [[ ! -e "$TEST" ]]; then
     ok "已直接写进便笺：不抢焦点，也不会多出空白便笺"
   else
     print -P "%F{yellow}!%f Binsen 还不能控制「便笺」，所以用了备用方式（会把便笺调到前台，便笺没打开时可能多一张空白便笺）。"
-    print    "  授权方法：在弹出的窗口里点 Choose Apps，只勾选「便笺 / Stickies」；"
+    print    "  授权方法：在弹出的窗口里点 Choose Apps，只添加「便笺 / Stickies」，右边选 At Any Time；"
     print    "  或到 系统设置 → 隐私与安全性 → System & App Protection Override（旧版系统叫「辅助功能」）里给 Binsen 授权。授权后重跑本脚本。"
     open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null || true
   fi
