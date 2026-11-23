@@ -29,7 +29,7 @@ cp "$HERE/Info.plist" "$BUILD/Contents/Info.plist"
 # 有开发者证书就用证书签名：以后更新时「辅助功能」授权不会失效；没有就用临时签名
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')
 if [[ -n "$IDENTITY" ]] && codesign --force --sign "$IDENTITY" --identifier "$ID" "$BUILD" >/dev/null 2>&1; then
-  SIGNED="证书签名（${IDENTITY%% (*}），更新后辅助功能授权会保留"
+  SIGNED="开发者证书签名，更新后辅助功能授权会保留"
 else
   codesign --force --sign - --identifier "$ID" "$BUILD" >/dev/null 2>&1
   SIGNED="临时签名，每次更新后需要重新打开辅助功能开关"
