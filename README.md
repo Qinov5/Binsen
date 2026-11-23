@@ -33,7 +33,7 @@ iPhone 快捷指令「Binsen」
 |---|---|---|
 | 辅助功能（推荐） | 便笺没打开时，把内容写进它启动时自带的空白便笺；新便笺出现后把焦点还给原来的 App | 可能多出一张空白便笺；焦点可能停在便笺上 |
 
-首次运行会弹出授权提示；也可以到 系统设置 → 隐私与安全性 → 辅助功能，打开 Binsen。
+首次运行会弹出授权提示；也可以到 系统设置 → 隐私与安全性 → 辅助功能（macOS 27 起叫 Device Control and Data Access），打开 Binsen。列表里没有的话，点 ＋ 添加 `~/Applications/Binsen.app`。
 
 安装脚本会优先用钥匙串里的开发者证书（Apple Development）签名，这样以后更新时授权不会失效；第一次签名时 macOS 可能会询问是否允许 codesign 使用钥匙串，选「始终允许」即可。没有证书时用临时签名，每次更新后需要在辅助功能里重新打开一次。
 
@@ -141,7 +141,7 @@ The script builds the app, installs it to `~/Applications`, creates the inbox fo
 
 After the sticky appears, keyboard focus is handed back to the app you were using, so typing on the Mac isn't interrupted.
 
-**Accessibility (recommended).** When Stickies isn't running, it opens an empty note on launch. With Accessibility access, Binsen writes your text into that note instead of leaving a blank one behind. Grant it in System Settings → Privacy & Security → Accessibility. If you have an Apple Development certificate, `install.sh` signs with it so the grant survives updates.
+**Accessibility (recommended).** When Stickies isn't running, it opens an empty note on launch. With Accessibility access, Binsen writes your text into that note instead of leaving a blank one behind. Grant it in System Settings → Privacy & Security → Accessibility (named Device Control and Data Access on macOS 27 and later). If you have an Apple Development certificate, `install.sh` signs with it so the grant survives updates.
 
 ## License
 

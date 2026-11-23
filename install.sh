@@ -77,8 +77,9 @@ fi
 if tail -5 "$LOG" 2>/dev/null | grep -q "辅助功能：已授权"; then
   ok "辅助功能已授权"
 else
-  print -P "%F{yellow}!%f 建议打开「辅助功能」：系统设置 → 隐私与安全性 → 辅助功能 → 打开 Binsen"
-  print    "  不开也能用，只是便笺没打开时，会多出一张空白便笺。打开后重跑本脚本即可。"
+  print -P "%F{yellow}!%f 建议授权：系统设置 → 隐私与安全性 → 辅助功能（macOS 27 起叫 Device Control and Data Access）→ 打开 Binsen"
+  print    "  不开也能用，只是便笺没打开时可能多出一张空白便笺、焦点可能停在便笺上。打开后重跑本脚本即可。"
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
 fi
 
 step "5/5 自检：模拟 iPhone 发来一条"
