@@ -56,17 +56,27 @@ zsh install.sh
 
 ## iPhone 端：快捷指令「Binsen」
 
+在 iPhone 上点开链接，选「添加快捷指令」：
+
+### [添加快捷指令 Binsen](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)
+
+它只做两件事：让你输入一段文字，存到 iCloud 云盘 › 快捷指令 › Binsen。添加后运行一次，写一句试试。
+
+想按一下就能写：设置 → 操作按钮 → 快捷指令 → Binsen（适用于有操作按钮的 iPhone）。
+
+<details>
+<summary>自己动手建</summary>
+
 1. 快捷指令 App → 右上角 ＋，命名「Binsen」。
 2. 添加操作 **要求输入**，类型选「文本」。
 3. 添加操作 **存储文件**：
    - 存储的内容选「提供的输入」
    - 关闭「询问存储位置」
    - 子路径填 `/Binsen/`
-4. 运行一次，写一句试试。
 
 也可以在 Mac 的快捷指令 App 里建，会通过 iCloud 同步到 iPhone。
 
-想按一下就能写：设置 → 操作按钮 → 快捷指令 → Binsen（适用于有操作按钮的 iPhone）。
+</details>
 
 ## 设置
 
@@ -137,7 +147,9 @@ zsh install.sh
 
 The script builds the app, installs it to `~/Applications`, creates the inbox folder, registers a LaunchAgent, and runs an end-to-end self-test.
 
-**iPhone Shortcut.** Create a shortcut with two actions:
+**iPhone Shortcut.** Open **[Add the Binsen shortcut](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)** on your iPhone and tap *Add Shortcut*.
+
+Or build it yourself with two actions:
 
 1. **Ask for Input** (Text)
 2. **Save File** — input: *Provided Input*, turn off *Ask Where to Save*, Subpath: `/Binsen/`
