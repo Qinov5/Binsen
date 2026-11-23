@@ -10,7 +10,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-let appVersion = "0.3.0"
+let appVersion = "0.3.1"
 let bundleID = "io.github.qinov5.binsen"
 let stickiesBundleID = "com.apple.Stickies"
 let archiveFolderName = "已处理"
@@ -184,17 +184,22 @@ enum StickyMaker {
 
     static let neverRefocus: Set<String> = [stickiesBundleID, "com.apple.loginwindow", "com.apple.ScreenSaver.Engine"]
 
-    /// 新版 macOS（14+）只允许「当前在前台的 App」把焦点让给别人。
-    /// 做法：先让自己短暂到前台（没有窗口，看不到），再把焦点让回原来的 App。
+    /// 把焦点还给原来的 App。
+    /// 有辅助功能权限时，直接把它设为前台（最可靠）；
+    /// 否则用 macOS 14+ 的协作激活：先让自己短暂到前台（没有窗口，看不到），再把焦点让给它。
     static func giveFocusBack(to app: NSRunningApplication?) {
         guard let app, !app.isTerminated,
               !neverRefocus.contains(app.bundleIdentifier ?? ""),
               app.processIdentifier != getpid() else { return }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier { return }
+        func isFront() -> Bool {
+            NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+        }
+        func viaAccessibility() {
+            _ = StickiesAX.set(AXUIElementCreateApplication(app.processIdentifier), "AXFrontmost", true as AnyObject)
+        }
+        func viaYield() {
             NSApp.activate(ignoringOtherApps: true)
-
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 if #available(macOS 14.0, *) {
                     NSApp.yieldActivation(to: app)
@@ -202,11 +207,22 @@ enum StickyMaker {
                 } else {
                     _ = app.activate(options: [.activateIgnoringOtherApps])
                 }
+            }
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            if isFront() { return }
+            let trusted = AXIsProcessTrusted()
+            if trusted { viaAccessibility() } else { viaYield() }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if isFront() { return }
+                if trusted { viaYield() } else { viaAccessibility() }   // 换另一种方式再试一次
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    let front = NSWorkspace.shared.frontmostApplication
-                    if front?.processIdentifier != app.processIdentifier {
-                        logLine("焦点没能还给「\(app.localizedName ?? "原来的 App")」，当前前台：\(front?.localizedName ?? "未知")")
+                    if !isFront() {
+                        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知"
+                        logLine("焦点没能还给「\(app.localizedName ?? "原来的 App")」，当前前台：\(front)（辅助功能：\(trusted ? "已授权" : "未授权")）")
                     }
                 }
             }
@@ -460,7 +476,7 @@ if let i = arguments.firstIndex(of: "--test") {
     let text = i + 1 < arguments.count ? arguments[i + 1] : "Binsen 自检 \(logDateFormatter.string(from: Date()))"
     let ok = StickyMaker.make(text)
     print(ok ? "OK" : "FAILED")
-    RunLoop.main.run(until: Date().addingTimeInterval(2))
+    RunLoop.main.run(until: Date().addingTimeInterval(2.5))
     exit(ok ? 0 : 1)
 }
 

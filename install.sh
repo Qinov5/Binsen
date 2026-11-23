@@ -91,10 +91,10 @@ done
 
 if [[ ! -e "$TEST" ]]; then
   ok "便笺里多了一张「Binsen 已接通 ✅」，这张可以直接删掉。"
-  sleep 1.5
+  sleep 2.5
   FRONT=$(lsappinfo info -only bundleid "$(lsappinfo front)" 2>/dev/null || true)
   if [[ "$FRONT" == *com.apple.Stickies* ]]; then
-    print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。日志：$LOG"
+    print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。打开「辅助功能」后通常就能解决。日志：$LOG"
   else
     ok "焦点已还给终端"
   fi
