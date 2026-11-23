@@ -10,7 +10,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-let appVersion = "0.3.1"
+let appVersion = "0.4.0"
 let bundleID = "io.github.qinov5.binsen"
 let stickiesBundleID = "com.apple.Stickies"
 let archiveFolderName = "已处理"
@@ -83,43 +83,76 @@ enum StickyMaker {
 
     static func make(_ text: String) -> Bool {
         let previous = NSWorkspace.shared.frontmostApplication
-        var ok = false
-        // 便笺没在运行时，一启动就会自带一张空白便笺。有辅助功能权限时，直接把内容写进这张，避免多出空白的一张。
-        if !isStickiesRunning, AXIsProcessTrusted() {
-            ok = viaLaunchNote(text)
-        }
+        // 首选：通过「便笺」自己的菜单新建并写入。不把便笺调到前台，也不会多出空白便笺（需要允许 Binsen 控制「便笺」）。
+        var ok = viaAccessibility(text)
         if !ok { ok = viaService(text) || viaUIScripting(text) }
         if ok, restoreFocus { giveFocusBack(to: previous) }
         return ok
     }
 
-    static var isStickiesRunning: Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: stickiesBundleID).isEmpty
+    static var stickiesApp: NSRunningApplication? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: stickiesBundleID).first
     }
 
-    /// 启动便笺，等它自动生成的空白便笺出现，把文字写进去。找不到空白便笺就返回 false，交给系统服务。
-    static func viaLaunchNote(_ text: String) -> Bool {
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: stickiesBundleID) else { return false }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-
-        var pid: pid_t = 0
-        let deadline = Date().addingTimeInterval(6)
-        while Date() < deadline {
-            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: stickiesBundleID).first,
-               running.isFinishedLaunching {
-                pid = running.processIdentifier
-                if !StickiesAX.windows(pid).isEmpty { break }
+    static func viaAccessibility(_ text: String) -> Bool {
+        let wasRunning = stickiesApp != nil
+        if !wasRunning {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: stickiesBundleID) else { return false }
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = false
+            NSWorkspace.shared.openApplication(at: url, configuration: config)
+            let deadline = Date().addingTimeInterval(5)
+            while Date() < deadline, !(stickiesApp?.isFinishedLaunching ?? false) {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         }
-        guard pid != 0 else { return false }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        guard let pid = stickiesApp?.processIdentifier else { return false }
+        guard StickiesAX.canControl(pid) else {
+            requestPermissionOnce()
+            return false
+        }
 
-        if StickiesAX.fillBlankNote(pid: pid, text: text) {
-            logLine("便笺刚启动，已写进它自带的空白便笺")
-            return true
+        if !wasRunning {
+            // 便笺刚启动：等它自带的空白便笺出现，直接写进这一张
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline, StickiesAX.windows(pid).isEmpty {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            if StickiesAX.fillBlankNote(pid: pid, text: text) {
+                logLine("已写进便笺启动时自带的空白便笺")
+                return true
+            }
         }
+
+        // 便笺已在运行：用它菜单里的「新建便笺」（⌘N）建一张，再写入
+        let before = StickiesAX.windows(pid)
+        guard StickiesAX.pressNewNote(pid),
+              let window = StickiesAX.waitForNewWindow(pid, excluding: before, timeout: 2) else {
+            logLine("通过菜单新建便笺失败，改用系统服务")
+            return false
+        }
+        for _ in 0..<5 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+            if StickiesAX.write(text, into: window) {
+                logLine("已通过便笺菜单新建并写入")
+                return true
+            }
+        }
+        logLine("新便笺已建好，但没能写入文字")
         return false
+    }
+
+    /// 没有控制「便笺」的权限时，每个新版本只弹一次系统授权提示
+    static func requestPermissionOnce() {
+        let executable = Bundle.main.executablePath ?? ""
+        let modified = (try? FileManager.default.attributesOfItem(atPath: executable)[.modificationDate] as? Date) ?? Date()
+        let stamp = String(Int(modified.timeIntervalSince1970))
+        logLine("没有控制「便笺」的权限：便笺会被调到前台，便笺没打开时可能多出一张空白便笺")
+        if settings.string(forKey: "AXPromptedBuild") != stamp {
+            settings.set(stamp, forKey: "AXPromptedBuild")
+            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+        }
     }
 
     /// 主路径：调用系统服务，不需要任何额外权限。
@@ -195,10 +228,10 @@ enum StickyMaker {
         func isFront() -> Bool {
             NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
         }
-        func viaAccessibility() {
+        func frontViaAccessibility() {
             _ = StickiesAX.set(AXUIElementCreateApplication(app.processIdentifier), "AXFrontmost", true as AnyObject)
         }
-        func viaYield() {
+        func frontViaYield() {
             NSApp.activate(ignoringOtherApps: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                 if #available(macOS 14.0, *) {
@@ -213,11 +246,11 @@ enum StickyMaker {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             if isFront() { return }
             let trusted = AXIsProcessTrusted()
-            if trusted { viaAccessibility() } else { viaYield() }
+            if trusted { frontViaAccessibility() } else { frontViaYield() }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 if isFront() { return }
-                if trusted { viaYield() } else { viaAccessibility() }   // 换另一种方式再试一次
+                if trusted { frontViaYield() } else { frontViaAccessibility() }   // 换另一种方式再试一次
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     if !isFront() {
@@ -233,14 +266,24 @@ enum StickyMaker {
 // MARK: - 读写便笺窗口（需要辅助功能权限）
 
 enum StickiesAX {
-    static func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+    static func copy(_ element: AXUIElement, _ name: String) -> (AXError, AnyObject?) {
         var value: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
-        return value
+        let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        return (error, value)
+    }
+
+    static func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+        let (error, value) = copy(element, name)
+        return error == .success ? value : nil
     }
 
     static func set(_ element: AXUIElement, _ name: String, _ value: AnyObject) -> Bool {
         AXUIElementSetAttributeValue(element, name as CFString, value) == .success
+    }
+
+    /// 能读到便笺的辅助功能信息，就说明有控制它的权限
+    static func canControl(_ pid: pid_t) -> Bool {
+        copy(AXUIElementCreateApplication(pid), "AXRole").0 == .success
     }
 
     static func windows(_ pid: pid_t) -> [AXUIElement] {
@@ -256,18 +299,53 @@ enum StickiesAX {
         return nil
     }
 
-    static func fillBlankNote(pid: pid_t, text: String) -> Bool {
-        for window in windows(pid) {
-            guard let area = textArea(in: window) else { continue }
-            let current = (attribute(area, "AXValue") as? String) ?? ""
-            guard current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+    /// 只往空白便笺里写，避免覆盖已有内容
+    static func write(_ text: String, into window: AXUIElement) -> Bool {
+        guard let area = textArea(in: window) else { return false }
+        let current = (attribute(area, "AXValue") as? String) ?? ""
+        guard current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
-            _ = set(area, "AXFocused", true as AnyObject)
-            let wrote = set(area, "AXSelectedText", text as CFString) || set(area, "AXValue", text as CFString)
-            let after = (attribute(area, "AXValue") as? String) ?? ""
-            if wrote, after.contains(String(text.prefix(20))) { return true }
-        }
+        let wrote = set(area, "AXSelectedText", text as CFString) || set(area, "AXValue", text as CFString)
+        let after = (attribute(area, "AXValue") as? String) ?? ""
+        let probe = String(text.prefix { $0 != "\n" }.prefix(10))
+        return wrote && after.contains(probe)
+    }
+
+    static func fillBlankNote(pid: pid_t, text: String) -> Bool {
+        for window in windows(pid) where write(text, into: window) { return true }
         return false
+    }
+
+    /// 在便笺的菜单里找 ⌘N（新建便笺），不依赖界面语言
+    static func newNoteItem(in element: AXUIElement, depth: Int = 0) -> AXUIElement? {
+        if (attribute(element, "AXRole") as? String) == "AXMenuItem",
+           (attribute(element, "AXMenuItemCmdChar") as? String)?.uppercased() == "N",
+           ((attribute(element, "AXMenuItemCmdModifiers") as? Int) ?? -1) == 0 {
+            return element
+        }
+        guard depth < 4, let children = attribute(element, "AXChildren") as? [AXUIElement] else { return nil }
+        for child in children {
+            if let found = newNoteItem(in: child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    static func pressNewNote(_ pid: pid_t) -> Bool {
+        guard let raw = attribute(AXUIElementCreateApplication(pid), "AXMenuBar") else { return false }
+        let menuBar = raw as! AXUIElement
+        guard let item = newNoteItem(in: menuBar) else { return false }
+        return AXUIElementPerformAction(item, "AXPress" as CFString) == .success
+    }
+
+    static func waitForNewWindow(_ pid: pid_t, excluding before: [AXUIElement], timeout: TimeInterval) -> AXUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            for window in windows(pid) where !before.contains(where: { CFEqual($0, window) }) {
+                return window
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return nil
     }
 }
 
@@ -445,19 +523,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func tick() { inbox.scan() }
 
-    /// 未授权时，每个新版本只弹一次系统授权提示，不反复打扰。
     func checkAccessibility() {
         if AXIsProcessTrusted() {
-            logLine("辅助功能：已授权")
-            return
-        }
-        logLine("辅助功能：未授权（便笺没打开时，可能会多出一张空白便笺）")
-        let executable = Bundle.main.executablePath ?? ""
-        let modified = (try? FileManager.default.attributesOfItem(atPath: executable)[.modificationDate] as? Date) ?? Date()
-        let stamp = String(Int(modified.timeIntervalSince1970))
-        if settings.string(forKey: "AXPromptedBuild") != stamp {
-            settings.set(stamp, forKey: "AXPromptedBuild")
-            _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            logLine("权限：可以控制所有 App")
+        } else if let pid = StickyMaker.stickiesApp?.processIdentifier, StickiesAX.canControl(pid) {
+            logLine("权限：可以控制「便笺」")
+        } else {
+            logLine("权限：尚未确认能否控制「便笺」（第一次新建便笺时会检查）")
         }
     }
 }

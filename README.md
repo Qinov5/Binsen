@@ -10,14 +10,13 @@
 iPhone 快捷指令「Binsen」
    └─ 存成 .txt → iCloud 云盘 › 快捷指令 › Binsen
                       └─ Mac 后台 Binsen 发现新文件
-                             └─ 调系统服务新建便笺 → 便笺 App 里出现一张
+                             └─ 在便笺里新建一张，写入文字
                              └─ 原文件移到 Binsen/已处理
 ```
 
 - 用的是 macOS 自带的便笺，不是仿制的浮窗。
-- 新建便笺走系统服务（Services → `Make Sticky`），不动剪贴板；服务不可用时才改用 ⌘N + ⌘V。
-- 便笺没打开时，直接把内容写进它启动时自带的那张空白便笺，不会多出一张空白的（需要辅助功能权限）。
-- 新便笺出现后，会把键盘焦点还给你正在用的 App，打字不会被打断。
+- 便笺不会被调到前台，正在 Mac 上打字不会被打断；便笺没打开时也不会多出空白便笺（需要允许 Binsen 控制「便笺」）。
+- 不动剪贴板。
 - 不需要服务器、账号或网络端口，只靠 iCloud 云盘同步。
 - 单个 Swift 文件，没有第三方依赖。
 
@@ -29,13 +28,19 @@ iPhone 快捷指令「Binsen」
 
 ## 权限
 
-| 权限 | 用途 | 不开会怎样 |
-|---|---|---|
-| 辅助功能（推荐） | 便笺没打开时，把内容写进它启动时自带的空白便笺；新便笺出现后把焦点还给原来的 App | 可能多出一张空白便笺；焦点可能停在便笺上 |
+推荐允许 Binsen 控制「便笺」这一个 App（不需要控制其他 App）。授权后，Binsen 会通过便笺自己的「新建便笺」菜单建一张再写入：
 
-首次运行会弹出授权提示；也可以到 系统设置 → 隐私与安全性 → 辅助功能（macOS 27 起叫 Device Control and Data Access），打开 Binsen。列表里没有的话，点 ＋ 添加 `~/Applications/Binsen.app`。
+- 便笺不会被调到前台，正在 Mac 上打字也不会被打断；
+- 便笺没打开时，直接写进它启动时自带的那张空白便笺，不会多出一张空白的。
 
-安装脚本会优先用钥匙串里的开发者证书（Apple Development）签名，这样以后更新时授权不会失效；第一次签名时 macOS 可能会询问是否允许 codesign 使用钥匙串，选「始终允许」即可。没有证书时用临时签名，每次更新后需要在辅助功能里重新打开一次。
+| 系统版本 | 在哪里授权 |
+|---|---|
+| macOS 27.3 及以后 | 弹窗里点 **Choose Apps**，只勾选「便笺」；或 系统设置 → 隐私与安全性 → System & App Protection Override |
+| 更早的版本 | 系统设置 → 隐私与安全性 → 辅助功能（macOS 27 早期版本叫 Device Control and Data Access），打开 Binsen |
+
+不授权也能用：会改用系统服务新建便笺，此时便笺会被调到前台，便笺没打开时可能多出一张空白便笺。
+
+安装脚本会优先用钥匙串里的开发者证书（Apple Development）签名，这样以后更新时授权不会失效；第一次签名时 macOS 可能会询问是否允许 codesign 使用钥匙串，选「始终允许」即可。没有证书时用临时签名，每次更新后需要重新授权一次。
 
 ## Mac 端安装
 
@@ -82,8 +87,8 @@ launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 |---|---|
 | 一直没出现便笺 | `tail -20 ~/Library/Logs/Binsen.log` |
 | iPhone 存了，Mac 收件箱里没文件 | iCloud 同步慢或 Mac 在睡眠；到「访达 › iCloud 云盘 › 快捷指令 › Binsen」看文件到了没有 |
-| 日志说需要「辅助功能」 | 系统设置 → 隐私与安全性 → 辅助功能 → 打开 Binsen。重新编译安装后可能要再打开一次 |
-| 新便笺出现后焦点没回到原来的 App | 日志里会记一行「焦点没能还给…」，把它发到 Issues |
+| 日志说「没有控制便笺的权限」 | 见上面「权限」一节 |
+| 新便笺出现后焦点没回到原来的 App | 先确认已授权 Binsen 控制「便笺」；仍有问题，把日志里「焦点没能还给…」那行发到 Issues |
 | 后台是否在运行 | `launchctl print gui/$(id -u)/io.github.qinov5.binsen \| grep state` |
 
 ## 卸载
@@ -99,9 +104,9 @@ zsh uninstall.sh
 - iPhone 快捷指令把文字存成 `.txt`，放进 iCloud 云盘的「快捷指令」文件夹下的 `Binsen`。
 - Mac 上的 `Binsen.app` 是一个不显示在程序坞的后台 App，由 LaunchAgent 在登录时启动，每 2 秒检查一次收件箱。
 - 从 iPhone 同步来的文件在 Mac 上可能只是占位（还没下载）。程序用 `setiopolicy_np` 打开按需下载，读不到时再用 `brctl download` 主动请求下载。
-- 读到内容后调用 `NSPerformService("Make Sticky", …)`，让便笺 App 新建一张，然后把原文件移到 `已处理`。
-- 如果便笺当时没在运行：先启动它，再通过辅助功能把文字写进它自带的空白便笺，而不是另建一张。
-- 新便笺出现后，有辅助功能权限时直接把原来的 App 设为前台；没有时退而用 macOS 14 的协作激活（`yieldActivation(to:)`）尝试交还焦点。
+- 读到内容后，通过辅助功能按下便笺菜单里的「新建便笺」（⌘N），再把文字写进这张新便笺；便笺不会被激活，所以不抢焦点。
+- 便笺当时没在运行：在后台启动它，把文字写进它启动时自带的空白便笺。
+- 没有控制「便笺」的权限时，改用系统服务 `NSPerformService("Make Sticky", …)`，再尽量把焦点交还原来的 App。
 
 ## 文件
 
@@ -118,7 +123,7 @@ uninstall.sh         卸载
 
 Type a line on your iPhone; a few seconds later it shows up as a new note in the built-in macOS **Stickies** app.
 
-**How it works.** An iPhone Shortcut saves your text as a `.txt` file into `iCloud Drive/Shortcuts/Binsen`. A small background app on the Mac watches that folder, creates a new sticky through the system service `Make Sticky` (no Accessibility permission needed), then moves the file into `已处理` (processed). No server, no account, no open ports.
+**How it works.** An iPhone Shortcut saves your text as a `.txt` file into `iCloud Drive/Shortcuts/Binsen`. A small background app on the Mac watches that folder, creates a new sticky, then moves the file into `已处理` (processed). No server, no account, no open ports.
 
 **Requirements.** macOS 13+, Xcode or Command Line Tools, iCloud Drive on both devices.
 
@@ -139,9 +144,7 @@ The script builds the app, installs it to `~/Applications`, creates the inbox fo
 
 **Logs:** `~/Library/Logs/Binsen.log` · **Uninstall:** `zsh uninstall.sh`
 
-After the sticky appears, keyboard focus is handed back to the app you were using, so typing on the Mac isn't interrupted.
-
-**Accessibility (recommended).** When Stickies isn't running, it opens an empty note on launch. With Accessibility access, Binsen writes your text into that note instead of leaving a blank one behind. Grant it in System Settings → Privacy & Security → Accessibility (named Device Control and Data Access on macOS 27 and later). If you have an Apple Development certificate, `install.sh` signs with it so the grant survives updates.
+**Permission (recommended).** Allow Binsen to control the Stickies app only (macOS 27.3+: click *Choose Apps* and pick Stickies; earlier versions: Privacy & Security → Accessibility). Binsen then creates the note through Stickies' own *New Note* menu and types into it, so Stickies never steals focus and no blank note is left behind when Stickies wasn't running. Without it, Binsen falls back to the `Make Sticky` service.
 
 ## License
 

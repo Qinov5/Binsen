@@ -74,13 +74,6 @@ if launchctl print "$DOMAIN/$ID" 2>/dev/null | grep -q "state = running"; then
 else
   fail "后台进程没起来。查看：launchctl print $DOMAIN/$ID ；日志：$LOG"
 fi
-if tail -5 "$LOG" 2>/dev/null | grep -q "辅助功能：已授权"; then
-  ok "辅助功能已授权"
-else
-  print -P "%F{yellow}!%f 建议授权：系统设置 → 隐私与安全性 → 辅助功能（macOS 27 起叫 Device Control and Data Access）→ 打开 Binsen"
-  print    "  不开也能用，只是便笺没打开时可能多出一张空白便笺、焦点可能停在便笺上。打开后重跑本脚本即可。"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null || true
-fi
 
 step "5/5 自检：模拟 iPhone 发来一条"
 TEST="$INBOX/安装自检-$(date +%H%M%S).txt"
@@ -92,10 +85,18 @@ done
 
 if [[ ! -e "$TEST" ]]; then
   ok "便笺里多了一张「Binsen 已接通 ✅」，这张可以直接删掉。"
+  if tail -8 "$LOG" 2>/dev/null | grep -q -e "已通过便笺菜单新建并写入" -e "已写进便笺启动时自带的空白便笺"; then
+    ok "已直接写进便笺：不抢焦点，也不会多出空白便笺"
+  else
+    print -P "%F{yellow}!%f Binsen 还不能控制「便笺」，所以用了备用方式（会把便笺调到前台，便笺没打开时可能多一张空白便笺）。"
+    print    "  授权方法：在弹出的窗口里点 Choose Apps，只勾选「便笺 / Stickies」；"
+    print    "  或到 系统设置 → 隐私与安全性 → System & App Protection Override（旧版系统叫「辅助功能」）里给 Binsen 授权。授权后重跑本脚本。"
+    open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null || true
+  fi
   sleep 2.5
   FRONT=$(lsappinfo info -only bundleid "$(lsappinfo front)" 2>/dev/null || true)
   if [[ "$FRONT" == *com.apple.Stickies* ]]; then
-    print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。打开「辅助功能」后通常就能解决。日志：$LOG"
+    print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。授权 Binsen 控制「便笺」后就不会再抢焦点。日志：$LOG"
   else
     ok "焦点已还给终端"
   fi
