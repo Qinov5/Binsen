@@ -1,48 +1,38 @@
-# Binsen
+# Binsen（便箋）
 
-在 iPhone 上写一句，几秒后 Mac 自带的「便笺」(Stickies) 里多一张。
+在 iPhone 上随手记下一句，几秒后，Mac 桌面的原生「便笺」(Stickies) 里就会安静地多出一张。
 
-名字来自日语「便箋（びんせん）」，意思就是便笺。
+https://github.com/user-attachments/assets/12b98983-d6f9-4837-83bc-dde8d83b0335
+
+**Binsen** 取自日语「便箋（びんせん）」，意为信笺、便笺。出门在外闪现的念头、临时待办或零碎摘录，不必再发给「文件传输助手」，也不用点开厚重的笔记软件——回到电脑前，它已经贴在桌面上等你了。
 
 [English](#english)
 
-```
+```text
 iPhone 快捷指令「Binsen」
-   └─ 存成 .txt → iCloud 云盘 › 快捷指令 › Binsen
-                      └─ Mac 后台 Binsen 发现新文件
-                             └─ 在便笺里新建一张，写入文字
-                             └─ 原文件移到 Binsen/已处理
+  └─ 存为 .txt ──▶ iCloud 云盘/快捷指令/Binsen
+                        └─ Mac 后台守护进程检测新文件
+                              ├─ 静默在「便笺」中新建一页并写入内容
+                              └─ 原文件归档至 Binsen/已处理
 ```
 
-- 用的是 macOS 自带的便笺，不是仿制的浮窗。
-- 便笺不会被调到前台，正在 Mac 上打字不会被打断；便笺没打开时也不会多出空白便笺（需要允许 Binsen 控制「便笺」）。
-- 不动剪贴板。
-- 不需要服务器、账号或网络端口，只靠 iCloud 云盘同步。
-- 单个 Swift 文件，没有第三方依赖。
+## 为什么做它
 
-## 要求
+* **纯正原生**：直接写入 macOS 自带的「便笺」App，不是第三方仿制浮窗。
+* **零打扰写入**：全程后台操作，不抢占当前窗口焦点，在 Mac 上打字不会被突然打断；若「便笺」尚未运行，会自动复用它启动时自带的默认空白页，绝不多留一张废纸。
+* **干净无痕**：完全不读写、不污染系统剪贴板。
+* **零外部依赖**：无需服务器、无需注册账号、不开放任何网络端口，纯靠 iCloud 云盘同步。
+* **极简透明**：核心逻辑仅单个 Swift 文件，无任何第三方依赖，代码一眼到底。
 
-- macOS 13 或更新版本
-- Xcode 或命令行工具（`xcode-select --install`）
-- Mac 和 iPhone 登录同一个 Apple 账户，并打开 iCloud 云盘
+## 环境要求
 
-## 权限
+* macOS 13 或更新版本
+* Xcode 或命令行工具（可通过 `xcode-select --install` 安装）
+* Mac 与 iPhone 登录同一个 Apple 账户，并开启 **iCloud 云盘**
 
-推荐允许 Binsen 控制「便笺」这一个 App（不需要控制其他 App）。授权后，Binsen 会通过便笺自己的「新建便笺」菜单建一张再写入：
+## 快速开始
 
-- 便笺不会被调到前台，正在 Mac 上打字也不会被打断；
-- 便笺没打开时，直接写进它启动时自带的那张空白便笺，不会多出一张空白的。
-
-| 系统版本 | 在哪里授权 |
-|---|---|
-| macOS 27.3 及以后 | 弹窗里点 **Choose Apps**，只添加「便笺」，并把它右边改成 **At Any Time**（选 Ask First 的话每次都会弹窗确认）；之后也可以在 系统设置 → 隐私与安全性 → System & App Protection Override 里修改 |
-| 更早的版本 | 系统设置 → 隐私与安全性 → 辅助功能（macOS 27 早期版本叫 Device Control and Data Access），打开 Binsen |
-
-不授权也能用：会改用系统服务新建便笺，此时便笺会被调到前台，便笺没打开时可能多出一张空白便笺。
-
-安装脚本会优先用钥匙串里的开发者证书（Apple Development）签名，这样以后更新时授权不会失效；第一次签名时 macOS 可能会询问是否允许 codesign 使用钥匙串，选「始终允许」即可。没有证书时用临时签名，每次更新后需要重新授权一次。
-
-## Mac 端安装
+### 1. Mac 端安装
 
 ```bash
 git clone https://github.com/Qinov5/Binsen.git
@@ -50,56 +40,72 @@ cd Binsen
 zsh install.sh
 ```
 
-脚本会：编译 → 装到 `~/Applications/Binsen.app` → 在 iCloud 里建收件箱 → 设为登录后自动运行 → 放一条测试进收件箱。便笺里出现「Binsen 已接通 ✅」就说明装好了。
+安装脚本会自动完成：**编译构建 → 安装至 `~/Applications/Binsen.app` → 创建 iCloud 收件箱目录 → 注册开机自启服务 → 投递一条自检消息**。
 
-更新：`git pull && zsh install.sh`
+看到桌面便笺里跳出 **「Binsen 已接通 ✅」**，即代表安装成功。
 
-## iPhone 端：快捷指令「Binsen」
+> **日常更新**：在项目目录下执行 `git pull && zsh install.sh` 即可覆盖更新。
+>
+> **关于签名**：脚本会优先使用钥匙串中的 `Apple Development` 证书签名（首次运行时若系统询问是否允许 `codesign` 访问钥匙串，选择「始终允许」即可），这样后续更新不会丢失系统授权；若无开发者证书则会采用临时签名，每次更新后需重新授权一次。
 
-在 iPhone 上点开链接，选「添加快捷指令」：
+### 2. 授予控制权限（强烈推荐）
 
-### [添加快捷指令 Binsen](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)
+首次触发自检时，系统会请求控制权限。建议仅允许 Binsen 控制 **「便笺」** 这一个 App——授权后，Binsen 才能通过菜单静默建页、不抢焦点，并消除冷启动时的多余空白页。
 
-它只做两件事：让你输入一段文字，存到 iCloud 云盘 › 快捷指令 › Binsen。添加后运行一次，写一句试试。
+| 系统版本 | 授权方式 |
+| :--- | :--- |
+| **macOS 27.3 及更新版本** | 在弹窗中点击 **Choose Apps**，仅添加「便笺」，并将右侧权限改为 **At Any Time**（若选 *Ask First* 则每次都会弹窗）。后续也可在 `系统设置 → 隐私与安全性 → System & App Protection Override` 中调整。 |
+| **更早版本** | 前往 `系统设置 → 隐私与安全性 → 辅助功能`（macOS 27 早期版本名为 *Device Control and Data Access*），开启 **Binsen**。 |
 
-想按一下就能写：设置 → 操作按钮 → 快捷指令 → Binsen（适用于有操作按钮的 iPhone）。
+*注：不授权同样可用。此时程序会自动降级调用系统服务（Make Sticky）创建便笺，但新建时会将「便笺」调至前台，且便笺未运行时可能会多出一张空白页。*
+
+### 3. iPhone 端配置快捷指令
+
+在 iPhone 上点击下方链接添加现成的快捷指令：
+
+👉 **[点击添加快捷指令「Binsen」](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)**
+
+它只做两件极简的事：唤起文本输入框 → 将内容存入 `iCloud 云盘 › 快捷指令 › Binsen`。添加后点一下，写句话试试看。
+
+💡 **顺手技巧**：如果你的 iPhone 带有「操作按钮」(Action Button)，可前往 `设置 → 操作按钮 → 快捷指令` 选择 **Binsen**，以后按一下侧边键就能随手贴便笺。你也可以将其添加到锁屏小组件或轻点背面触发。
 
 <details>
-<summary>自己动手建</summary>
+<summary>不想点链接？两步手动创建</summary>
 
-1. 快捷指令 App → 右上角 ＋，命名「Binsen」。
-2. 添加操作 **要求输入**，类型选「文本」。
+1. 打开「快捷指令」App，点击右上角 **＋**，命名为 `Binsen`。
+2. 添加操作 **要求输入**，输入类型选「文本」。
 3. 添加操作 **存储文件**：
-   - 存储的内容选「提供的输入」
-   - 关闭「询问存储位置」
-   - 子路径填 `/Binsen/`
+   * 存储内容选择「提供的输入」
+   * **关闭**「询问存储位置」
+   * 子路径填写 `/Binsen/`
 
-也可以在 Mac 的快捷指令 App 里建，会通过 iCloud 同步到 iPhone。
-
+*(在 Mac 的快捷指令 App 中创建也可，会自动通过 iCloud 同步至 iPhone。)*
 </details>
 
-## 设置
+## 进阶设置
+
+可通过 `defaults` 命令按需调整默认行为：
 
 ```bash
-# 新建便笺后让便笺留在前台（默认会把焦点还给原来的 App）
+# 新建便笺后让「便笺」留在前台（默认会将焦点归还给原窗口）
 defaults write io.github.qinov5.binsen RestoreFocus -bool false
 
-# 换一个收件箱文件夹
+# 自定义监听的收件箱目录
 defaults write io.github.qinov5.binsen InboxPath "~/某个文件夹"
 
-# 改完重启后台
+# 修改配置后重启后台服务生效
 launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 ```
 
-## 排查
+## 常见问题排查
 
-| 现象 | 处理 |
-|---|---|
-| 一直没出现便笺 | `tail -20 ~/Library/Logs/Binsen.log` |
-| iPhone 存了，Mac 收件箱里没文件 | iCloud 同步慢或 Mac 在睡眠；到「访达 › iCloud 云盘 › 快捷指令 › Binsen」看文件到了没有 |
-| 日志说「没有控制便笺的权限」 | 见上面「权限」一节 |
-| 新便笺出现后焦点没回到原来的 App | 先确认已授权 Binsen 控制「便笺」；仍有问题，把日志里「焦点没能还给…」那行发到 Issues |
-| 后台是否在运行 | `launchctl print gui/$(id -u)/io.github.qinov5.binsen \| grep state` |
+| 现象 | 排查方式 |
+| :--- | :--- |
+| 迟迟没出现新便笺 | 查看运行日志：`tail -20 ~/Library/Logs/Binsen.log` |
+| iPhone 已保存，但 Mac 收件箱为空 | 通常是 iCloud 同步延迟或 Mac 处于休眠状态；可前往 `访达 › iCloud 云盘 › 快捷指令 › Binsen` 查看文件是否到达 |
+| 日志提示「没有控制便笺的权限」 | 参考上方「授予控制权限」一节开启授权 |
+| 新建便笺后焦点未回到原窗口 | 先确认已完成权限配置；若仍复现，欢迎将日志中 `焦点没能还给…` 所在行贴至 Issues |
+| 检查后台服务是否在运行 | 执行 `launchctl print gui/$(id -u)/io.github.qinov5.binsen \| grep state` |
 
 ## 卸载
 
@@ -107,37 +113,46 @@ launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 zsh uninstall.sh
 ```
 
-收件箱文件夹和已有的便笺都会保留。
+卸载脚本仅移除后台应用与自启配置，**iCloud 收件箱文件夹及桌面已有的全部便笺均会完整保留**。
 
-## 工作原理
+## 实现原理与目录结构
 
-- iPhone 快捷指令把文字存成 `.txt`，放进 iCloud 云盘的「快捷指令」文件夹下的 `Binsen`。
-- Mac 上的 `Binsen.app` 是一个不显示在程序坞的后台 App，由 LaunchAgent 在登录时启动，每 2 秒检查一次收件箱。
-- 从 iPhone 同步来的文件在 Mac 上可能只是占位（还没下载）。程序用 `setiopolicy_np` 打开按需下载，读不到时再用 `brctl download` 主动请求下载。
-- 读到内容后，通过辅助功能按下便笺菜单里的「新建便笺」（⌘N），再把文字写进这张新便笺；便笺不会被激活，所以不抢焦点。
-- 便笺当时没在运行：在后台启动它，把文字写进它启动时自带的空白便笺。
-- 没有控制「便笺」的权限时，改用系统服务 `NSPerformService("Make Sticky", …)`，再尽量把焦点交还原来的 App。
+* **轻量常驻**：`Binsen.app` 作为无程序坞图标的后台应用运行，由 `LaunchAgent` 在登录时拉起，每 2 秒轮询一次收件箱目录。
+* **按需拉取云端文件**：从 iPhone 刚同步过来的 `.txt` 在 Mac 上可能仅是未下载的占位文件。程序通过 `setiopolicy_np` 开启按需下载，遇到未就绪文件还会主动调用 `brctl download` 触发拉取。
+* **无感注入**：读取文本后，借助辅助功能接口直接触发便笺菜单栏的「新建便笺」（`⌘N`）并填入内容，全程不激活便笺窗口；若便笺未在运行，则静默后台拉起并直接写入其初始空白页；若未获授权，则平滑降级至 `NSPerformService("Make Sticky", …)` 并尽力归还焦点。
 
-## 文件
-
-```
-Sources/main.swift   全部逻辑
-Info.plist           后台 App 配置
-install.sh           编译、安装、自启、自检（可重复运行，用于更新）
-uninstall.sh         卸载
+```text
+Sources/main.swift   核心监听与写入逻辑（单文件无依赖）
+Info.plist           后台无界面 App 配置
+install.sh           编译、签名、安装、自启与端到端自检（支持幂等更新）
+uninstall.sh         清理应用与自启服务
 ```
 
 ---
 
 ## English
 
-Type a line on your iPhone; a few seconds later it shows up as a new note in the built-in macOS **Stickies** app.
+Jot down a quick line on your iPhone; seconds later, it quietly appears as a brand-new note in the built-in macOS **Stickies** app.
 
-**How it works.** An iPhone Shortcut saves your text as a `.txt` file into `iCloud Drive/Shortcuts/Binsen`. A small background app on the Mac watches that folder, creates a new sticky, then moves the file into `已处理` (processed). No server, no account, no open ports.
+Named after the Japanese word **便箋 (*binsen*, stationery pad)**, Binsen bridges fleeting thoughts on your phone straight onto your Mac desktop—without servers, accounts, open ports, or clipboard clutter.
 
-**Requirements.** macOS 13+, Xcode or Command Line Tools, iCloud Drive on both devices.
+### Highlights
 
-**Install (Mac).**
+* **Truly Native**: Writes directly into Apple's built-in **Stickies.app**, not a custom floating-window clone.
+* **Zero Interruption**: Never steals window focus while you're typing on your Mac. If Stickies isn't running yet, Binsen launches it quietly and reuses its default blank note—leaving zero extra blank notes behind.
+* **Hands Off Your Clipboard**: Leaves your system pasteboard completely untouched.
+* **Pure iCloud Sync**: No server, no sign-up, no network listeners. Everything stays in your own iCloud Drive.
+* **Auditable & Minimal**: A single dependency-free Swift file.
+
+### Requirements
+
+* macOS 13 or later
+* Xcode or Command Line Tools (`xcode-select --install`)
+* Both Mac and iPhone signed into the same Apple Account with **iCloud Drive** enabled
+
+### Setup
+
+#### 1. Install on Mac
 
 ```bash
 git clone https://github.com/Qinov5/Binsen.git
@@ -145,18 +160,29 @@ cd Binsen
 zsh install.sh
 ```
 
-The script builds the app, installs it to `~/Applications`, creates the inbox folder, registers a LaunchAgent, and runs an end-to-end self-test.
+The installer compiles the app into `~/Applications/Binsen.app`, creates the inbox folder in iCloud Drive, registers a `LaunchAgent` for login startup, and drops a test message. Once **`Binsen 已接通 ✅`** pops up in Stickies, you're good to go.
 
-**iPhone Shortcut.** Open **[Add the Binsen shortcut](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)** on your iPhone and tap *Add Shortcut*.
+#### 2. Grant Permission (Recommended)
 
-Or build it yourself with two actions:
+Allow Binsen to control **Stickies** only:
+* **macOS 27.3+**: In the prompt, click **Choose Apps**, add **Stickies**, and set it to **At Any Time** (manageable later under *System Settings → Privacy & Security → System & App Protection Override*).
+* **Earlier macOS**: Enable **Binsen** under *System Settings → Privacy & Security → Accessibility* (or *Device Control and Data Access* on early macOS 27 builds).
 
-1. **Ask for Input** (Text)
-2. **Save File** — input: *Provided Input*, turn off *Ask Where to Save*, Subpath: `/Binsen/`
+*Without this permission, Binsen gracefully falls back to the macOS `Make Sticky` system service, which brings Stickies to the front and may leave an extra blank note on cold launch.*
 
-**Logs:** `~/Library/Logs/Binsen.log` · **Uninstall:** `zsh uninstall.sh`
+#### 3. Add the iPhone Shortcut
 
-**Permission (recommended).** Allow Binsen to control the Stickies app only (macOS 27.3+: click *Choose Apps*, add Stickies and set it to *At Any Time*; earlier versions: Privacy & Security → Accessibility). Binsen then creates the note through Stickies' own *New Note* menu and types into it, so Stickies never steals focus and no blank note is left behind when Stickies wasn't running. Without it, Binsen falls back to the `Make Sticky` service.
+Open **[Add the Binsen Shortcut](https://www.icloud.com/shortcuts/22b6bb3e26b046278a8ee42ee9dd0edd)** on your iPhone and tap **Add Shortcut** *(Tip: bind it to your iPhone's **Action Button** for instant one-press capture)*.
+
+Or build it yourself with just two actions:
+1. **Ask for Input** (`Text`)
+2. **Save File** — Input: *Provided Input*, toggle off *Ask Where to Save*, Subpath: `/Binsen/`
+
+### Maintenance
+
+* **Logs**: `tail -20 ~/Library/Logs/Binsen.log`
+* **Update**: `git pull && zsh install.sh`
+* **Uninstall**: `zsh uninstall.sh` *(your inbox folder and existing Stickies remain untouched)*
 
 ## License
 
