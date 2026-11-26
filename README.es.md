@@ -126,6 +126,7 @@ El script solo elimina la app en segundo plano y su inicio automático. **La car
 ```text
 Sources/main.swift   lógica de vigilancia y escritura (un solo archivo, sin dependencias)
 Info.plist           configuración de la app en segundo plano sin interfaz
+Icon/                icono de la app (AppIcon.svg es el original; install.sh elige el .icns según la versión de macOS)
 install.sh           compilación, firma, instalación, inicio automático y prueba de extremo a extremo (se puede repetir para actualizar)
 uninstall.sh         elimina la app y el servicio de inicio automático
 ```

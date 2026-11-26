@@ -10,7 +10,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-let appVersion = "0.4.0"
+let appVersion = "0.4.1"
 let bundleID = "io.github.qinov5.binsen"
 let stickiesBundleID = "com.apple.Stickies"
 let archiveFolderName = "已处理"

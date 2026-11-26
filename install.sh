@@ -26,6 +26,10 @@ rm -rf "$HERE/build"
 mkdir -p "$BUILD/Contents/MacOS"
 xcrun swiftc -O -swift-version 5 -o "$BUILD/Contents/MacOS/$NAME" "$HERE/Sources/main.swift"
 cp "$HERE/Info.plist" "$BUILD/Contents/Info.plist"
+# 图标：macOS 26 起，边缘不够实的图标会被系统套上灰框，所以新系统用不透明的全出血版（由系统裁成圆角），旧系统用自带圆角和阴影的版本
+mkdir -p "$BUILD/Contents/Resources"
+if (( $(sw_vers -productVersion | cut -d. -f1) >= 26 )); then ICON=AppIcon.icns; else ICON=AppIcon-legacy.icns; fi
+cp "$HERE/Icon/$ICON" "$BUILD/Contents/Resources/AppIcon.icns"
 # 有开发者证书就用证书签名：以后更新时「辅助功能」授权不会失效；没有就用临时签名
 IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')
 if [[ -n "$IDENTITY" ]] && codesign --force --sign "$IDENTITY" --identifier "$ID" "$BUILD" >/dev/null 2>&1; then
@@ -43,6 +47,9 @@ sleep 0.5
 mkdir -p "$HOME/Applications"
 rm -rf "$APP"
 cp -R "$BUILD" "$APP"
+# 让访达、启动台和 App 列表换上新图标
+touch "$APP"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 ok "$APP"
 
 step "3/5 准备 iCloud 收件箱"

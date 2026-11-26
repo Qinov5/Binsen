@@ -126,6 +126,7 @@ zsh uninstall.sh
 ```text
 Sources/main.swift   核心監聽與寫入邏輯（單一檔案、無依賴）
 Info.plist           背景無介面 App 設定
+Icon/                App 圖示（AppIcon.svg 為原始檔；安裝時依系統版本選用 .icns）
 install.sh           編譯、簽署、安裝、自動啟動與端對端自我檢測（可重複執行以更新）
 uninstall.sh         移除 App 與自動啟動服務
 ```

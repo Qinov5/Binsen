@@ -126,6 +126,7 @@ zsh uninstall.sh
 ```text
 Sources/main.swift   監視と書き込みのコアロジック（1 ファイル、依存なし）
 Info.plist           UI を持たないバックグラウンド App の設定
+Icon/                App アイコン（AppIcon.svg が元データ。インストール時に macOS のバージョンに合わせて .icns を選択）
 install.sh           ビルド、署名、インストール、自動起動、エンドツーエンドのセルフチェック（繰り返し実行して更新可能）
 uninstall.sh         App と自動起動サービスを削除
 ```
