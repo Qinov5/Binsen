@@ -1,16 +1,21 @@
 // Binsen
-// 监听 iCloud 云盘里的收件箱文件夹，把 iPhone 快捷指令存进来的文本变成 Mac 自带「便笺」里的一张新便笺。
+// 把 iPhone 快捷指令发来的文字变成 Mac 自带「便笺」里的一张新便笺。两条通道：
+//   · 提醒事项（推荐）：快捷指令「添加新提醒事项」到「Binsen」列表，几秒就同步到 Mac
+//   · iCloud 云盘文件：快捷指令「存储文件」到 iCloud 云盘/快捷指令/Binsen（iPhone 可能要等打开「文件」App 才上传）
 //
 // 用法：
-//   Binsen                 常驻运行（由 LaunchAgent 启动）
-//   Binsen --test [文字]    立即新建一张便笺，用来自检
+//   Binsen                  常驻运行（由 LaunchAgent 启动）
+//   Binsen --test [文字]     立即新建一张便笺，用来自检
+//   Binsen --remind [文字]   往「Binsen」提醒事项列表里加一条，用来自检提醒事项通道
 //   Binsen --version
 
 import AppKit
 import ApplicationServices
+import CoreServices
+import EventKit
 import Foundation
 
-let appVersion = "0.4.1"
+let appVersion = "0.6.0"
 let bundleID = "io.github.qinov5.binsen"
 let stickiesBundleID = "com.apple.Stickies"
 let archiveFolderName = "已处理"
@@ -18,9 +23,11 @@ let acceptedExtensions: Set<String> = ["", "txt", "text", "md", "markdown"]
 
 let home = FileManager.default.homeDirectoryForCurrentUser
 let settings = UserDefaults.standard
+let launchedAt = Date()
 
 // 读到 iCloud 里还没下载到本机的文件时，让系统当场下载，而不是直接报错（后台进程默认不一定会下载）。
 // 3 = IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES，0 = IOPOL_SCOPE_PROCESS，2 = IOPOL_MATERIALIZE_DATALESS_FILES_ON
+// 下载期间，读文件的线程会一直等，所以读文件统一放在后台线程，主线程不等 iCloud。
 let materializeResult = setiopolicy_np(3, 0, 2)
 
 /// 默认收件箱：iCloud 云盘 /快捷指令/Binsen
@@ -38,12 +45,26 @@ var inboxURL: URL {
 /// 关闭：defaults write io.github.qinov5.binsen RestoreFocus -bool false
 var restoreFocus: Bool { settings.object(forKey: "RestoreFocus") as? Bool ?? true }
 
+/// 提醒事项通道监听的列表名（没有会自动新建）。
+/// 可改：defaults write io.github.qinov5.binsen RemindersList "某个列表"
+/// 关闭：defaults write io.github.qinov5.binsen UseReminders -bool false
+var remindersListName: String {
+    let name = settings.string(forKey: "RemindersList")?.trimmingCharacters(in: .whitespaces) ?? ""
+    return name.isEmpty ? "Binsen" : name
+}
+var useReminders: Bool { settings.object(forKey: "UseReminders") as? Bool ?? true }
+
 // MARK: - 日志  ~/Library/Logs/Binsen.log
 
 let logURL = home.appendingPathComponent("Library/Logs/Binsen.log")
 let logDateFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return f
+}()
+let clockFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "MM-dd HH:mm:ss"
     return f
 }()
 
@@ -74,6 +95,39 @@ func trimLogIfNeeded() {
     if size > 1_000_000 { try? Data().write(to: logURL) }
 }
 
+/// 8 秒 / 3 分 5 秒 / 2 小时 14 分
+func durationText(_ seconds: TimeInterval) -> String {
+    let s = max(0, Int(seconds.rounded()))
+    if s < 60 { return "\(s) 秒" }
+    if s < 3600 { return s % 60 == 0 ? "\(s / 60) 分钟" : "\(s / 60) 分 \(s % 60) 秒" }
+    let minutes = s % 3600 / 60
+    return minutes == 0 ? "\(s / 3600) 小时" : "\(s / 3600) 小时 \(minutes) 分"
+}
+
+// MARK: - 睡眠记录：分清「Mac 睡着了」和「iCloud 送得慢」
+
+enum Power {
+    private static var sleepStart: Date?
+    private static var sleeps: [(start: Date, end: Date)] = []
+
+    static func willSleep() { sleepStart = Date() }
+
+    /// 返回这次睡了多久
+    static func didWake() -> TimeInterval? {
+        guard let start = sleepStart else { return nil }
+        sleepStart = nil
+        let now = Date()
+        sleeps.append((start, now))
+        sleeps.removeAll { $0.end < now.addingTimeInterval(-7 * 24 * 3600) }
+        return now.timeIntervalSince(start)
+    }
+
+    /// from…to 这段时间里 Mac 睡了多久
+    static func asleep(from: Date, to: Date) -> TimeInterval {
+        sleeps.reduce(0) { sum, s in sum + max(0, min(to, s.end).timeIntervalSince(max(from, s.start))) }
+    }
+}
+
 // MARK: - 新建便笺
 
 enum StickyMaker {
@@ -91,56 +145,74 @@ enum StickyMaker {
     }
 
     static var stickiesApp: NSRunningApplication? {
-        NSRunningApplication.runningApplications(withBundleIdentifier: stickiesBundleID).first
+        NSRunningApplication.runningApplications(withBundleIdentifier: stickiesBundleID).first { !$0.isTerminated }
+    }
+
+    /// 一边转动 RunLoop（让系统消息照常进来），一边等条件成立
+    @discardableResult
+    static func waitUntil(_ timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() >= deadline { return false }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return true
+    }
+
+    /// 在后台启动便笺（不抢焦点），等它启动完成
+    static func launchStickies() -> NSRunningApplication? {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: stickiesBundleID) else {
+            logLine("找不到「便笺」App")
+            return nil
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.addsToRecentItems = false
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            guard let error else { return }
+            DispatchQueue.main.async { logLine("启动「便笺」失败：\(error.localizedDescription)") }
+        }
+        waitUntil(10) { stickiesApp?.isFinishedLaunching == true }
+        if stickiesApp == nil { logLine("「便笺」10 秒内没有启动起来") }
+        return stickiesApp
     }
 
     static func viaAccessibility(_ text: String) -> Bool {
         let wasRunning = stickiesApp != nil
-        if !wasRunning {
-            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: stickiesBundleID) else { return false }
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = false
-            NSWorkspace.shared.openApplication(at: url, configuration: config)
-            let deadline = Date().addingTimeInterval(5)
-            while Date() < deadline, !(stickiesApp?.isFinishedLaunching ?? false) {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            }
-        }
-        guard let pid = stickiesApp?.processIdentifier else { return false }
-        guard StickiesAX.canControl(pid) else {
+        guard let app = wasRunning ? stickiesApp : launchStickies() else { return false }
+        let pid = app.processIdentifier
+
+        // 刚启动的便笺要过一会儿才响应辅助功能，多等几秒，别过早判成「没权限」
+        guard waitUntil(wasRunning ? 0.3 : 5, { StickiesAX.canControl(pid) }) else {
             requestPermissionOnce()
             return false
         }
 
         if !wasRunning {
-            // 便笺刚启动：等它自带的空白便笺出现，直接写进这一张
-            let deadline = Date().addingTimeInterval(3)
-            while Date() < deadline, StickiesAX.windows(pid).isEmpty {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            // 便笺刚启动：等它把上次的便笺都摆出来，再优先写进它自带的那张空白便笺，免得多出一张空白
+            StickiesAX.waitForWindowsToSettle(pid)
             if StickiesAX.fillBlankNote(pid: pid, text: text) {
                 logLine("已写进便笺启动时自带的空白便笺")
                 return true
             }
         }
 
-        // 便笺已在运行：用它菜单里的「新建便笺」（⌘N）建一张，再写入
+        // 用便笺菜单里的「新建便笺」（⌘N）建一张，再写入
         let before = StickiesAX.windows(pid)
-        guard StickiesAX.pressNewNote(pid),
-              let window = StickiesAX.waitForNewWindow(pid, excluding: before, timeout: 2) else {
-            logLine("通过菜单新建便笺失败，改用系统服务")
+        guard waitUntil(wasRunning ? 0.3 : 3, { StickiesAX.pressNewNote(pid) }) else {
+            logLine("便笺的菜单还没准备好，改用系统服务")
             return false
         }
-        for _ in 0..<5 {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-            if StickiesAX.write(text, into: window) {
-                logLine("已通过便笺菜单新建并写入")
-                return true
-            }
+        guard let created = StickiesAX.waitForNewWindow(pid, excluding: before, timeout: 3) else {
+            logLine("便笺已新建，但读不到新窗口，改用系统服务")
+            return false
         }
-        logLine("新便笺已建好，但没能写入文字")
-        return false
+        guard waitUntil(1.5, { StickiesAX.write(text, into: created, isNewNote: true) }) else {
+            logLine("新便笺已建好，但没能写入文字")
+            return false
+        }
+        logLine("已通过便笺菜单新建并写入")
+        return true
     }
 
     /// 没有控制「便笺」的权限时，每个新版本只弹一次系统授权提示
@@ -155,7 +227,7 @@ enum StickyMaker {
         }
     }
 
-    /// 主路径：调用系统服务，不需要任何额外权限。
+    /// 备用路径一：调用便笺的系统服务，不需要任何额外权限。
     static func viaService(_ text: String) -> Bool {
         for name in serviceNames {
             let pasteboard = NSPasteboard.withUniqueName()
@@ -163,13 +235,16 @@ enum StickyMaker {
             pasteboard.setString(text, forType: .string)
             let ok = NSPerformService(name, pasteboard)
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { pasteboard.releaseGlobally() }
-            if ok { return true }
+            if ok {
+                logLine("已通过系统服务新建便笺")
+                return true
+            }
         }
         logLine("系统服务「新建便笺」调用失败，尝试备用方式")
         return false
     }
 
-    /// 备用路径：⌘N 新建 + ⌘V 粘贴。需要在「辅助功能」里允许 Binsen。
+    /// 备用路径二：⌘N 新建 + ⌘V 粘贴。需要在「辅助功能」里允许 Binsen。
     static func viaUIScripting(_ text: String) -> Bool {
         guard AXIsProcessTrusted() else {
             if !askedForAccessibility {
@@ -290,6 +365,23 @@ enum StickiesAX {
         (attribute(AXUIElementCreateApplication(pid), "AXWindows") as? [AXUIElement]) ?? []
     }
 
+    /// 便笺刚启动时会陆续恢复上次的便笺，等窗口数量稳定下来（最多 4 秒）
+    static func waitForWindowsToSettle(_ pid: pid_t) {
+        let deadline = Date().addingTimeInterval(4)
+        var lastCount = -1
+        var stableSince = Date()
+        while Date() < deadline {
+            let count = windows(pid).count
+            if count != lastCount {
+                lastCount = count
+                stableSince = Date()
+            } else if Date().timeIntervalSince(stableSince) >= (count == 0 ? 1.5 : 0.6) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+    }
+
     static func textArea(in element: AXUIElement, depth: Int = 0) -> AXUIElement? {
         if (attribute(element, "AXRole") as? String) == "AXTextArea" { return element }
         guard depth < 6, let children = attribute(element, "AXChildren") as? [AXUIElement] else { return nil }
@@ -299,53 +391,83 @@ enum StickiesAX {
         return nil
     }
 
-    /// 只往空白便笺里写，避免覆盖已有内容
-    static func write(_ text: String, into window: AXUIElement) -> Bool {
+    /// 只往空白便笺里写，避免覆盖已有内容。
+    /// isNewNote：刚用 ⌘N 建的那张，如果发现文字已经在里面（上一轮其实写成功了），也算成功，避免重复写。
+    static func write(_ text: String, into window: AXUIElement, isNewNote: Bool = false) -> Bool {
         guard let area = textArea(in: window) else { return false }
+        let probe = String(text.prefix { $0 != "\n" }.prefix(10))
         let current = (attribute(area, "AXValue") as? String) ?? ""
+        if isNewNote, !probe.isEmpty, current.contains(probe) { return true }
         guard current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
         let wrote = set(area, "AXSelectedText", text as CFString) || set(area, "AXValue", text as CFString)
         let after = (attribute(area, "AXValue") as? String) ?? ""
-        let probe = String(text.prefix { $0 != "\n" }.prefix(10))
         return wrote && after.contains(probe)
     }
 
     static func fillBlankNote(pid: pid_t, text: String) -> Bool {
-        for window in windows(pid) where write(text, into: window) { return true }
-        return false
+        windows(pid).contains { write(text, into: $0) }
     }
 
-    /// 在便笺的菜单里找 ⌘N（新建便笺），不依赖界面语言
-    static func newNoteItem(in element: AXUIElement, depth: Int = 0) -> AXUIElement? {
+    /// 按快捷键在便笺的菜单里找菜单项，不依赖界面语言。modifiers：0 = 只按 ⌘
+    static func menuItem(in element: AXUIElement, key: String, modifiers: Int, depth: Int = 0) -> AXUIElement? {
         if (attribute(element, "AXRole") as? String) == "AXMenuItem",
-           (attribute(element, "AXMenuItemCmdChar") as? String)?.uppercased() == "N",
-           ((attribute(element, "AXMenuItemCmdModifiers") as? Int) ?? -1) == 0 {
+           (attribute(element, "AXMenuItemCmdChar") as? String)?.uppercased() == key,
+           ((attribute(element, "AXMenuItemCmdModifiers") as? Int) ?? -1) == modifiers {
             return element
         }
         guard depth < 4, let children = attribute(element, "AXChildren") as? [AXUIElement] else { return nil }
         for child in children {
-            if let found = newNoteItem(in: child, depth: depth + 1) { return found }
+            if let found = menuItem(in: child, key: key, modifiers: modifiers, depth: depth + 1) { return found }
         }
         return nil
     }
 
-    static func pressNewNote(_ pid: pid_t) -> Bool {
-        guard let raw = attribute(AXUIElementCreateApplication(pid), "AXMenuBar") else { return false }
-        let menuBar = raw as! AXUIElement
-        guard let item = newNoteItem(in: menuBar) else { return false }
+    static func pressMenuItem(_ pid: pid_t, key: String, modifiers: Int) -> Bool {
+        guard let raw = attribute(AXUIElementCreateApplication(pid), "AXMenuBar"),
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return false }
+        guard let item = menuItem(in: raw as! AXUIElement, key: key, modifiers: modifiers) else { return false }
         return AXUIElementPerformAction(item, "AXPress" as CFString) == .success
     }
 
+    /// 「文件 › 新建便笺」⌘N
+    static func pressNewNote(_ pid: pid_t) -> Bool {
+        pressMenuItem(pid, key: "N", modifiers: 0)
+    }
+
     static func waitForNewWindow(_ pid: pid_t, excluding before: [AXUIElement], timeout: TimeInterval) -> AXUIElement? {
-        let deadline = Date().addingTimeInterval(timeout)
-        while Date() < deadline {
-            for window in windows(pid) where !before.contains(where: { CFEqual($0, window) }) {
-                return window
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        var found: AXUIElement?
+        StickyMaker.waitUntil(timeout) {
+            found = windows(pid).first { window in !before.contains { CFEqual($0, window) } }
+            return found != nil
         }
-        return nil
+        return found
+    }
+}
+
+// MARK: - 监听收件箱：文件一到就处理，不用干等下一次定时检查
+
+final class FolderWatcher {
+    private var stream: FSEventStreamRef?
+    private let onChange: () -> Void
+
+    init(path: String, onChange: @escaping () -> Void) {
+        self.onChange = onChange
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        let callback: FSEventStreamCallback = { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue().onChange()
+        }
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot)
+        guard let stream = FSEventStreamCreate(kCFAllocatorDefault, callback, &context, [path] as CFArray,
+                                               FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.2, flags) else {
+            logLine("提示：无法监听收件箱的变化，只靠每 2 秒检查一次")
+            return
+        }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
+        FSEventStreamStart(stream)
     }
 }
 
@@ -354,11 +476,28 @@ enum StickiesAX {
 final class Inbox {
     let url: URL
     var archiveURL: URL { url.appendingPathComponent(archiveFolderName, isDirectory: true) }
-    private var failures: [String: Int] = [:]       // 新建便笺失败次数
-    private var readFailures: [String: Int] = [:]   // 读取失败次数（等待 iCloud 下载时会一直重试）
+
+    private struct Item {
+        let url: URL
+        let created: Date      // iPhone 存下这个文件的时间（iCloud 会原样带过来）
+        let seen: Date         // Mac 第一次看到它的时间
+        var text: String?
+        var reading = false
+        var readStarted: Date?
+        var readFailures = 0
+        var makeFailures = 0
+        var retryAt = Date.distantPast
+        var warnedStuck = false
+    }
+
+    private var items: [String: Item] = [:]
     private var finished: Set<String> = []   // 归档失败时，记住已贴过的文件，避免重复贴
     private var busy = false
+    private var rescanNeeded = false
+    private var scanScheduled = false
     private var warnedMissingFolder = false
+    private let readQueue = DispatchQueue(label: "io.github.qinov5.binsen.read", qos: .userInitiated,
+                                          attributes: .concurrent)
 
     init(url: URL) { self.url = url }
 
@@ -374,71 +513,151 @@ final class Inbox {
         }
     }
 
+    /// 合并短时间内的多次触发
+    func scanSoon(after delay: TimeInterval = 0.1) {
+        guard !scanScheduled else { return }
+        scanScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
+            scanScheduled = false
+            scan()
+        }
+    }
+
     func scan() {
-        guard !busy else { return }
+        if busy {
+            rescanNeeded = true
+            return
+        }
         busy = true
-        defer { busy = false }
+        defer {
+            busy = false
+            if rescanNeeded {
+                rescanNeeded = false
+                scanSoon()
+            }
+        }
 
         prepare()
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .creationDateKey]
-        guard let items = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys) else { return }
+        guard let entries = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: keys) else { return }
+        let now = Date()
 
-        var pending: [(url: URL, created: Date)] = []
-        for item in items {
-            let name = item.lastPathComponent
+        var present: Set<String> = []
+        for entry in entries {
+            let name = entry.lastPathComponent
             if name.hasPrefix(".") {
-                if name.hasSuffix(".icloud") { requestDownload(placeholder: item) }
+                if name.hasSuffix(".icloud") { requestDownload(placeholder: entry) }
                 continue
             }
-            let values = try? item.resourceValues(forKeys: Set(keys))
+            let values = try? entry.resourceValues(forKeys: Set(keys))
             if values?.isDirectory == true { continue }
-            guard acceptedExtensions.contains(item.pathExtension.lowercased()) else { continue }
-            pending.append((item, values?.creationDate ?? .distantPast))
+            guard acceptedExtensions.contains(entry.pathExtension.lowercased()) else { continue }
+            let created = values?.creationDate ?? now
+            let key = "\(name)|\(created.timeIntervalSince1970)"
+            present.insert(key)
+            if finished.contains(key) || items[key] != nil { continue }
+            items[key] = Item(url: entry, created: created, seen: now)
+            logArrival(name: name, created: created, seen: now)
         }
+        // 文件已经不在了（被删掉或移走）就不再管它
+        for key in Array(items.keys) where !present.contains(key) { items[key] = nil }
+        finished.formIntersection(present)
 
-        for entry in pending.sorted(by: { $0.created < $1.created }) {
-            handle(entry.url, created: entry.created)
+        let order = items.keys.sorted { (items[$0]?.created ?? now) < (items[$1]?.created ?? now) }
+        for key in order {
+            guard let item = items[key], Date() >= item.retryAt else { continue }
+            if item.text != nil {
+                paste(key)
+            } else if !item.reading {
+                startReading(key)
+            } else if let started = item.readStarted, Date().timeIntervalSince(started) > 60, !item.warnedStuck {
+                items[key]?.warnedStuck = true
+                logLine("iCloud 还在下载内容（已等 \(durationText(Date().timeIntervalSince(started)))）：\(item.url.lastPathComponent)")
+                requestDownload(of: item.url)
+            }
         }
     }
 
-    private func handle(_ file: URL, created: Date) {
-        let key = "\(file.lastPathComponent)|\(created.timeIntervalSince1970)"
-        if finished.contains(key) { return }
-        if let count = failures[key], count >= 5 { return }
-
-        let text: String
-        switch readText(file) {
-        case .success(let value):
-            text = value
-            readFailures[key] = nil
-        case .failure(let error):
-            let n = (readFailures[key] ?? 0) + 1
-            readFailures[key] = n
-            if n == 1 || n % 30 == 0 {
-                logLine("读不到内容（第 \(n) 次，已请求 iCloud 下载）：\(file.lastPathComponent) · \(describe(error))")
+    /// 记下 iCloud 花了多久才把文件送到这台 Mac，方便判断慢在哪里
+    private func logArrival(name: String, created: Date, seen: Date) {
+        let waited = seen.timeIntervalSince(created)
+        var note = "收到：\(name)（\(clockFormatter.string(from: created)) 存入"
+        if created < launchedAt {
+            note += "，Binsen 启动时发现"
+        } else if waited >= 5 {
+            note += "，iCloud 用了 \(durationText(waited)) 才送到这台 Mac"
+            let slept = Power.asleep(from: created, to: seen)
+            if slept >= 60 {
+                note += "，其中 Mac 睡眠 \(durationText(slept))"
+            } else if waited >= 120 {
+                note += "；期间 Mac 一直醒着，多半是 iPhone 迟迟没有上传（打开「文件」App 才会传），改用提醒事项通道可避免，见 README"
             }
-            if n == 1 || n % 15 == 0 { requestDownload(of: file) }
-            return
         }
+        logLine(note + "）")
+    }
 
+    private func startReading(_ key: String) {
+        guard var item = items[key] else { return }
+        item.reading = true
+        item.readStarted = Date()
+        items[key] = item
+        let file = item.url
+        readQueue.async {
+            let result = Inbox.readText(file)
+            DispatchQueue.main.async { self.finishReading(key, result) }
+        }
+    }
+
+    private func finishReading(_ key: String, _ result: Result<String, Error>) {
+        guard var item = items[key] else { return }
+        item.reading = false
+        let waited = Date().timeIntervalSince(item.readStarted ?? Date())
+        switch result {
+        case .success(let text):
+            item.text = text
+            item.readFailures = 0
+            if waited >= 3 {
+                logLine("内容已从 iCloud 下载好（等了 \(durationText(waited))）：\(item.url.lastPathComponent)")
+            }
+        case .failure(let error):
+            item.readFailures += 1
+            let n = item.readFailures
+            item.retryAt = Date().addingTimeInterval(min(30, Double(n) * 2))
+            if n == 1 || n % 20 == 0 {
+                logLine("读不到内容（第 \(n) 次，已请求 iCloud 下载）：\(item.url.lastPathComponent) · \(describe(error))")
+            }
+            if n == 1 || n % 5 == 0 { requestDownload(of: item.url) }
+        }
+        items[key] = item
+        scanSoon()
+    }
+
+    private func paste(_ key: String) {
+        guard var item = items[key], let text = item.text else { return }
+        let name = item.url.lastPathComponent
         let content = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if content.isEmpty {
-            archive(file, key: key)
+            archive(item.url, key: key)
+            items[key] = nil
             return
         }
 
         if StickyMaker.make(content) {
-            logLine("已贴到便笺：\(file.lastPathComponent)")
-            failures[key] = nil
-            archive(file, key: key)
+            logLine("已贴到便笺：\(name)（从存入到贴出共 \(durationText(Date().timeIntervalSince(item.created)))）")
+            archive(item.url, key: key)
+            items[key] = nil
         } else {
-            failures[key, default: 0] += 1
-            logLine("新建便笺失败（第 \(failures[key] ?? 0) 次）：\(file.lastPathComponent)")
+            // 不放弃：2、4、8 … 秒后重试，最长每分钟一次，直到贴上为止
+            item.makeFailures += 1
+            let n = item.makeFailures
+            item.retryAt = Date().addingTimeInterval(min(60, pow(2, Double(min(n, 6)))))
+            if n <= 3 || n % 10 == 0 { logLine("新建便笺失败（第 \(n) 次，稍后自动重试）：\(name)") }
+            items[key] = item
         }
     }
 
-    private func readText(_ file: URL) -> Result<String, Error> {
+    static func readText(_ file: URL) -> Result<String, Error> {
         let data: Data
         do {
             data = try Data(contentsOf: file)
@@ -498,30 +717,267 @@ final class Inbox {
     }
 }
 
+// MARK: - 提醒事项通道
+// iPhone 快捷指令「添加新提醒事项」到「Binsen」列表 → 提醒事项走 CloudKit，一般几秒就同步到 Mac
+// → 读到后贴成便笺，再把这条提醒事项标记为已完成（在提醒事项里随时可以清除已完成项）。
+
+final class RemindersInbox {
+    let store = EKEventStore()
+    private var authorized = false
+    private var busy = false
+    private var rescanNeeded = false
+    private var scanScheduled = false
+    private var warnedNoList = false
+    private var seen: Set<String> = []                       // 已记过「收到」的
+    private var pasted: Set<String> = []                     // 已贴出、但标记完成失败的，避免重复贴
+    private var failures: [String: (count: Int, retryAt: Date)] = [:]
+    private var observer: NSObjectProtocol?
+
+    static func requestAccess(_ store: EKEventStore, _ done: @escaping (Bool) -> Void) {
+        let finish: (Bool, Error?) -> Void = { granted, error in
+            DispatchQueue.main.async {
+                if let error { logLine("提醒事项：请求权限出错 \(describe(error))") }
+                done(granted)
+            }
+        }
+        if #available(macOS 14.0, *) {
+            store.requestFullAccessToReminders(completion: finish)
+        } else {
+            store.requestAccess(to: .reminder, completion: finish)
+        }
+    }
+
+    static func findList(_ store: EKEventStore) -> EKCalendar? {
+        store.calendars(for: .reminder).first { $0.title == remindersListName }
+    }
+
+    func start() {
+        RemindersInbox.requestAccess(store) { [weak self] granted in
+            guard let self else { return }
+            self.authorized = granted
+            guard granted else {
+                logLine("提醒事项：没有访问权限，这条通道先不开。到 系统设置 → 隐私与安全性 → 提醒事项 → 打开 Binsen，再重启 Binsen")
+                return
+            }
+            self.store.refreshSourcesIfNecessary()
+            self.ensureList()
+            self.observer = NotificationCenter.default.addObserver(
+                forName: .EKEventStoreChanged, object: self.store, queue: .main) { [weak self] _ in self?.scanSoon() }
+            logLine("提醒事项：已开启，监听列表「\(remindersListName)」")
+            self.scanSoon()
+        }
+    }
+
+    /// 没有「Binsen」列表就在 iCloud 账户里新建一个，iPhone 上随后就能选到
+    private func ensureList() {
+        guard RemindersInbox.findList(store) == nil else { return }
+        let sources = store.sources.filter { !$0.calendars(for: .reminder).isEmpty }
+        guard let source = sources.first(where: { $0.title == "iCloud" })
+                ?? store.defaultCalendarForNewReminders()?.source ?? sources.first else {
+            logLine("提醒事项：找不到可以新建列表的账户，请在「提醒事项」App 里手动新建列表「\(remindersListName)」")
+            return
+        }
+        let calendar = EKCalendar(for: .reminder, eventStore: store)
+        calendar.title = remindersListName
+        calendar.source = source
+        do {
+            try store.saveCalendar(calendar, commit: true)
+            logLine("提醒事项：已在「\(source.title)」里新建列表「\(remindersListName)」")
+        } catch {
+            logLine("提醒事项：新建列表失败（\(describe(error))），请在「提醒事项」App 里手动新建「\(remindersListName)」")
+        }
+    }
+
+    /// 定时调用：主动向 iCloud 要一次新数据，不完全依赖推送
+    func refresh() {
+        guard authorized else { return }
+        store.refreshSourcesIfNecessary()
+        scanSoon()
+    }
+
+    func scanSoon(after delay: TimeInterval = 0.3) {
+        guard authorized, !scanScheduled else { return }
+        scanScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
+            scanScheduled = false
+            scan()
+        }
+    }
+
+    private func scan() {
+        if busy {
+            rescanNeeded = true
+            return
+        }
+        guard let list = RemindersInbox.findList(store) else {
+            if !warnedNoList {
+                warnedNoList = true
+                logLine("提醒事项：还没有列表「\(remindersListName)」")
+                ensureList()
+            }
+            return
+        }
+        warnedNoList = false
+        busy = true
+        let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: [list])
+        _ = store.fetchReminders(matching: predicate) { [weak self] reminders in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.handle(reminders ?? [])
+                self.busy = false
+                if self.rescanNeeded {
+                    self.rescanNeeded = false
+                    self.scanSoon()
+                }
+            }
+        }
+    }
+
+    private func handle(_ reminders: [EKReminder]) {
+        let now = Date()
+        for reminder in reminders.sorted(by: { ($0.creationDate ?? now) < ($1.creationDate ?? now) }) {
+            let id = reminder.calendarItemIdentifier
+            if let failure = failures[id], Date() < failure.retryAt { continue }
+            let created = reminder.creationDate ?? now
+            let text = [reminder.title, reminder.notes]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+            let preview = String(text.prefix { $0 != "\n" }.prefix(24))
+
+            if !seen.contains(id) {
+                seen.insert(id)
+                let waited = Date().timeIntervalSince(created)
+                var note = "收到：提醒事项「\(preview)」（\(clockFormatter.string(from: created)) 添加"
+                if created < launchedAt {
+                    note += "，Binsen 启动时发现"
+                } else if waited >= 5 {
+                    note += "，iCloud 用了 \(durationText(waited)) 才送到这台 Mac"
+                    let slept = Power.asleep(from: created, to: Date())
+                    if slept >= 60 { note += "，其中 Mac 睡眠 \(durationText(slept))" }
+                }
+                logLine(note + "）")
+            }
+
+            if text.isEmpty || pasted.contains(id) {
+                complete(reminder)
+                continue
+            }
+            if StickyMaker.make(text) {
+                failures[id] = nil
+                logLine("已贴到便笺：提醒事项「\(preview)」（从添加到贴出共 \(durationText(Date().timeIntervalSince(created)))）")
+                pasted.insert(id)
+                complete(reminder)
+            } else {
+                let n = (failures[id]?.count ?? 0) + 1
+                failures[id] = (n, Date().addingTimeInterval(min(60, pow(2, Double(min(n, 6))))))
+                if n <= 3 || n % 10 == 0 { logLine("新建便笺失败（第 \(n) 次，稍后自动重试）：提醒事项「\(preview)」") }
+            }
+        }
+    }
+
+    private func complete(_ reminder: EKReminder) {
+        let id = reminder.calendarItemIdentifier
+        reminder.isCompleted = true
+        do {
+            try store.save(reminder, commit: true)
+            pasted.remove(id)
+            seen.remove(id)
+        } catch {
+            logLine("提醒事项：标记完成失败（\(describe(error))），之后会再试，不会重复贴")
+        }
+    }
+
+    /// --remind：往列表里加一条，用来自检整条提醒事项通道
+    static func addForTest(_ text: String) -> Bool {
+        let store = EKEventStore()
+        var granted: Bool?
+        requestAccess(store) { granted = $0 }
+        StickyMaker.waitUntil(90) { granted != nil }
+        guard granted == true else {
+            print("没有提醒事项权限：系统设置 → 隐私与安全性 → 提醒事项 → 打开 Binsen")
+            return false
+        }
+        StickyMaker.waitUntil(10) { findList(store) != nil }
+        guard let list = findList(store) else {
+            print("还没有提醒事项列表「\(remindersListName)」")
+            return false
+        }
+        let reminder = EKReminder(eventStore: store)
+        reminder.title = text
+        reminder.calendar = list
+        do {
+            try store.save(reminder, commit: true)
+            return true
+        } catch {
+            print("添加提醒事项失败：\(describe(error))")
+            return false
+        }
+    }
+}
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let inbox = Inbox(url: inboxURL)
+    var reminders: RemindersInbox?
     var timer: Timer?
+    var ticks = 0
+    var watcher: FolderWatcher?
+    var activity: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         trimLogIfNeeded()
         logLine("启动 v\(appVersion)，收件箱：\(inbox.url.path)")
         checkAccessibility()
         if materializeResult != 0 { logLine("提示：无法开启 iCloud 按需下载（返回 \(materializeResult)），改用主动下载") }
+
+        // 没有窗口的后台 App 会被系统「App Nap」，定时检查可能被推迟几十秒；声明正在为用户工作，避免被压低
+        activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "及时把 iPhone 发来的文字贴进便笺")
+
         inbox.prepare()
+        watcher = FolderWatcher(path: inbox.url.path) { [weak self] in self?.inbox.scanSoon(after: 0.2) }
         inbox.scan()
 
-        let timer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(tick),
-                                         userInfo: nil, repeats: true)
+        if useReminders {
+            let reminders = RemindersInbox()
+            reminders.start()
+            self.reminders = reminders
+        } else {
+            logLine("提醒事项通道已关闭（UseReminders = false）")
+        }
+
+        // 兜底：每 2 秒再看一次收件箱（也负责失败后的重试），每 10 秒看一次提醒事项，每分钟主动向 iCloud 刷新一次
+        let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.inbox.scan()
+            self.ticks += 1
+            if self.ticks % 30 == 0 {
+                self.reminders?.refresh()
+            } else if self.ticks % 5 == 0 {
+                self.reminders?.scanSoon()
+            }
+        }
         timer.tolerance = 0.5
         self.timer = timer
 
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(tick), name: NSWorkspace.didWakeNotification, object: nil)
+        let center = NSWorkspace.shared.notificationCenter
+        _ = center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            Power.willSleep()
+            logLine("Mac 进入睡眠：睡眠期间收不到新便笺，唤醒后会自动补上")
+        }
+        _ = center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            let slept = Power.didWake()
+            logLine("Mac 已唤醒" + (slept.map { "（睡了 \(durationText($0))）" } ?? ""))
+            self?.inbox.scanSoon()
+            self?.reminders?.refresh()
+        }
+        for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.inbox.scanSoon() }
+        }
     }
-
-    @objc func tick() { inbox.scan() }
 
     func checkAccessibility() {
         if AXIsProcessTrusted() {
@@ -549,6 +1005,13 @@ if let i = arguments.firstIndex(of: "--test") {
     let ok = StickyMaker.make(text)
     print(ok ? "OK" : "FAILED")
     RunLoop.main.run(until: Date().addingTimeInterval(2.5))
+    exit(ok ? 0 : 1)
+}
+
+if let i = arguments.firstIndex(of: "--remind") {
+    let text = i + 1 < arguments.count ? arguments[i + 1] : "Binsen 提醒事项自检 \(logDateFormatter.string(from: Date()))"
+    let ok = RemindersInbox.addForTest(text)
+    print(ok ? "OK" : "FAILED")
     exit(ok ? 0 : 1)
 }
 

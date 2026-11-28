@@ -19,7 +19,7 @@ step() { print -P "\n%B$1%b" }
 ok()   { print -P "%F{green}✓%f $1" }
 fail() { print -P "%F{red}✗%f $1"; exit 1 }
 
-step "1/5 编译"
+step "1/6 编译"
 xcrun --find swiftc >/dev/null 2>&1 || fail "找不到 Swift 编译器，先运行：xcode-select --install"
 BUILD="$HERE/build/$NAME.app"
 rm -rf "$HERE/build"
@@ -40,7 +40,7 @@ else
 fi
 ok "$("$BUILD/Contents/MacOS/$NAME" --version) · $SIGNED"
 
-step "2/5 安装到 ~/Applications"
+step "2/6 安装到 ~/Applications"
 launchctl bootout "$DOMAIN/$ID" 2>/dev/null || true
 pkill -x "$NAME" 2>/dev/null || true
 sleep 0.5
@@ -52,12 +52,12 @@ touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP" >/dev/null 2>&1 || true
 ok "$APP"
 
-step "3/5 准备 iCloud 收件箱"
+step "3/6 准备 iCloud 收件箱"
 [[ -d "$SHORTCUTS_ICLOUD" ]] || fail "没找到 iCloud 云盘里的「快捷指令」文件夹。请确认 iCloud 云盘已开启，并在 iPhone 上打开过一次快捷指令。"
 mkdir -p "$INBOX/已处理" || fail "无法在 iCloud 云盘里创建：$INBOX"
 ok "iCloud 云盘 › 快捷指令 › Binsen"
 
-step "4/5 设为登录后自动运行"
+step "4/6 设为登录后自动运行"
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$AGENT" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -82,7 +82,7 @@ else
   fail "后台进程没起来。查看：launchctl print $DOMAIN/$ID ；日志：$LOG"
 fi
 
-step "5/5 自检：模拟 iPhone 发来一条"
+step "5/6 自检：iCloud 云盘通道（模拟 iPhone 存入一个文件）"
 TEST="$INBOX/安装自检-$(date +%H%M%S).txt"
 print -r -- "Binsen 已接通 ✅  $(date '+%m-%d %H:%M')" > "$TEST"
 for i in {1..15}; do
@@ -90,30 +90,48 @@ for i in {1..15}; do
   sleep 1
 done
 
-if [[ ! -e "$TEST" ]]; then
-  ok "便笺里多了一张「Binsen 已接通 ✅」，这张可以直接删掉。"
-  if tail -8 "$LOG" 2>/dev/null | grep -q -e "已通过便笺菜单新建并写入" -e "已写进便笺启动时自带的空白便笺"; then
-    ok "已直接写进便笺：不抢焦点，也不会多出空白便笺"
+if [[ -e "$TEST" ]]; then
+  print "\n收件箱 15 秒内没被处理，单独测一下新建便笺…"
+  if "$BIN" --test "Binsen 自检：新建便笺正常"; then
+    fail "新建便笺没问题，但后台没处理收件箱，多半是 iCloud 文件夹的访问权限。最近日志：\n$(tail -5 "$LOG" 2>/dev/null)"
   else
-    print -P "%F{yellow}!%f Binsen 还不能控制「便笺」，所以用了备用方式（会把便笺调到前台，便笺没打开时可能多一张空白便笺）。"
-    print    "  授权方法：在弹出的窗口里点 Choose Apps，只添加「便笺 / Stickies」，右边选 At Any Time；"
-    print    "  或到 系统设置 → 隐私与安全性 → System & App Protection Override（旧版系统叫「辅助功能」）里给 Binsen 授权。授权后重跑本脚本。"
-    open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null || true
+    fail "新建便笺失败。请到 系统设置 → 隐私与安全性 → 辅助功能，允许 Binsen，然后重跑本脚本。最近日志：\n$(tail -5 "$LOG" 2>/dev/null)"
   fi
-  sleep 2.5
-  FRONT=$(lsappinfo info -only bundleid "$(lsappinfo front)" 2>/dev/null || true)
-  if [[ "$FRONT" == *com.apple.Stickies* ]]; then
-    print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。授权 Binsen 控制「便笺」后就不会再抢焦点。日志：$LOG"
-  else
-    ok "焦点已还给终端"
-  fi
-  print "\n下一步：在 iPhone 上建快捷指令，步骤见 README.md。"
-  exit 0
 fi
 
-print "\n收件箱 15 秒内没被处理，单独测一下新建便笺…"
-if "$BIN" --test "Binsen 自检：新建便笺正常"; then
-  fail "新建便笺没问题，但后台没处理收件箱，多半是 iCloud 文件夹的访问权限。最近日志：\n$(tail -5 "$LOG" 2>/dev/null)"
+ok "便笺里多了一张「Binsen 已接通 ✅」，这张可以直接删掉。"
+if tail -15 "$LOG" 2>/dev/null | grep -q -e "已通过便笺菜单新建并写入" -e "已写进便笺启动时自带的空白便笺"; then
+  ok "已直接写进便笺：不抢焦点，也不会多出空白便笺"
 else
-  fail "新建便笺失败。请到 系统设置 → 隐私与安全性 → 辅助功能，允许 Binsen，然后重跑本脚本。最近日志：\n$(tail -5 "$LOG" 2>/dev/null)"
+  print -P "%F{yellow}!%f Binsen 还不能控制「便笺」，所以用了备用方式（会把便笺调到前台，便笺没打开时可能多一张空白便笺）。"
+  print    "  授权方法：在弹出的窗口里点 Choose Apps，只添加「便笺 / Stickies」，右边选 At Any Time；"
+  print    "  或到 系统设置 → 隐私与安全性 → System & App Protection Override（旧版系统叫「辅助功能」）里给 Binsen 授权。授权后重跑本脚本。"
+  open "x-apple.systempreferences:com.apple.preference.security" 2>/dev/null || true
 fi
+sleep 2.5
+FRONT=$(lsappinfo info -only bundleid "$(lsappinfo front)" 2>/dev/null || true)
+if [[ "$FRONT" == *com.apple.Stickies* ]]; then
+  print -P "%F{yellow}!%f 焦点停在了便笺上，没能还给终端。授权 Binsen 控制「便笺」后就不会再抢焦点。日志：$LOG"
+else
+  ok "焦点已还给终端"
+fi
+
+step "6/6 自检：提醒事项通道"
+print "  第一次会弹窗请求访问「提醒事项」，请点「允许」（90 秒内）。"
+REMIND="Binsen 提醒事项通道已接通 ✅  $(date '+%m-%d %H:%M')"
+if "$BIN" --remind "$REMIND" >/dev/null 2>&1; then
+  for i in {1..20}; do
+    tail -8 "$LOG" 2>/dev/null | grep -q "已贴到便笺：提醒事项「Binsen 提醒事项通道已接通" && break
+    sleep 1
+  done
+  if tail -8 "$LOG" 2>/dev/null | grep -q "已贴到便笺：提醒事项「Binsen 提醒事项通道已接通"; then
+    ok "便笺里又多了一张「Binsen 提醒事项通道已接通 ✅」，也可以删掉。"
+  else
+    print -P "%F{yellow}!%f 已往提醒事项列表「Binsen」里加了一条，但 20 秒内没贴出来。先看日志：tail -20 $LOG"
+  fi
+else
+  print -P "%F{yellow}!%f 提醒事项通道还没开：到 系统设置 → 隐私与安全性 → 提醒事项，打开 Binsen，然后重跑本脚本。"
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders" 2>/dev/null || true
+fi
+
+print "\n下一步：在 iPhone 上设置快捷指令，步骤见 README.md。"
