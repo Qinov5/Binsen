@@ -15,7 +15,7 @@ import CoreServices
 import EventKit
 import Foundation
 
-let appVersion = "0.6.0"
+let appVersion = "0.7.0"
 let bundleID = "io.github.qinov5.binsen"
 let stickiesBundleID = "com.apple.Stickies"
 let archiveFolderName = "已处理"
@@ -53,6 +53,14 @@ var remindersListName: String {
     return name.isEmpty ? "Binsen" : name
 }
 var useReminders: Bool { settings.object(forKey: "UseReminders") as? Bool ?? true }
+
+/// 新便笺放在哪儿：topRight（默认）从屏幕右上角往下排，不压住已有便笺；cascade 从便笺默认位置依次往右下错开；off 不挪
+/// 改：defaults write io.github.qinov5.binsen NotePlacement cascade
+var notePlacement: String { (settings.string(forKey: "NotePlacement") ?? "").lowercased() }
+
+/// 已处理的原文保留几天，到期自动删除（iCloud 云盘「已处理」里的文件、提醒事项列表里已完成的条目）；0 = 一直保留
+/// 改：defaults write io.github.qinov5.binsen KeepDays -int 7
+var keepDays: Int { settings.object(forKey: "KeepDays") == nil ? 30 : max(0, settings.integer(forKey: "KeepDays")) }
 
 // MARK: - 日志  ~/Library/Logs/Binsen.log
 
@@ -191,8 +199,8 @@ enum StickyMaker {
         if !wasRunning {
             // 便笺刚启动：等它把上次的便笺都摆出来，再优先写进它自带的那张空白便笺，免得多出一张空白
             StickiesAX.waitForWindowsToSettle(pid)
-            if StickiesAX.fillBlankNote(pid: pid, text: text) {
-                logLine("已写进便笺启动时自带的空白便笺")
+            if let filled = StickiesAX.fillBlankNote(pid: pid, text: text) {
+                logLine("已写进便笺启动时自带的空白便笺" + NotePlacer.place(filled, pid: pid))
                 return true
             }
         }
@@ -211,7 +219,7 @@ enum StickyMaker {
             logLine("新便笺已建好，但没能写入文字")
             return false
         }
-        logLine("已通过便笺菜单新建并写入")
+        logLine("已通过便笺菜单新建并写入" + NotePlacer.place(created, pid: pid))
         return true
     }
 
@@ -405,8 +413,26 @@ enum StickiesAX {
         return wrote && after.contains(probe)
     }
 
-    static func fillBlankNote(pid: pid_t, text: String) -> Bool {
-        windows(pid).contains { write(text, into: $0) }
+    /// 写进第一张空白便笺，返回那张便笺的窗口
+    static func fillBlankNote(pid: pid_t, text: String) -> AXUIElement? {
+        windows(pid).first { write(text, into: $0) }
+    }
+
+    /// 窗口的位置和大小（辅助功能坐标：原点在主屏左上角，y 往下）
+    static func frame(_ window: AXUIElement) -> CGRect? {
+        guard let position = attribute(window, "AXPosition"), let size = attribute(window, "AXSize"),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var origin = CGPoint.zero
+        var extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent) else { return nil }
+        return CGRect(origin: origin, size: extent)
+    }
+
+    static func move(_ window: AXUIElement, to point: CGPoint) -> Bool {
+        var origin = point
+        guard let value = AXValueCreate(.cgPoint, &origin) else { return false }
+        return set(window, "AXPosition", value)
     }
 
     /// 按快捷键在便笺的菜单里找菜单项，不依赖界面语言。modifiers：0 = 只按 ⌘
@@ -442,6 +468,80 @@ enum StickiesAX {
             return found != nil
         }
         return found
+    }
+}
+
+// MARK: - 新便笺放在哪儿：默认从屏幕右上角往下排，不压住已有的便笺
+
+enum NotePlacer {
+    static let margin: CGFloat = 16      // 离屏幕边缘
+    static let gap: CGFloat = 12         // 右上角排列时便笺之间的间距
+    static let step: CGFloat = 26        // 错开时每次挪多少，正好露出上一张的标题栏
+    static let maxColumns = 2            // 右上角最多排两列，再多就在右上角依次错开
+
+    /// 把新便笺挪到合适的位置，返回接在日志后面的说明；不挪时返回空字符串
+    static func place(_ window: AXUIElement, pid: pid_t) -> String {
+        let mode = notePlacement
+        guard mode != "off", let frame = StickiesAX.frame(window), let area = visibleArea(around: frame) else { return "" }
+        let others = StickiesAX.windows(pid).filter { !CFEqual($0, window) }.compactMap { StickiesAX.frame($0) }
+        let result: (CGPoint, String)
+        if mode == "cascade" {
+            result = (cascade(from: frame.origin, size: frame.size, in: area, avoiding: others, dx: step), "往右下错开")
+        } else {
+            result = topRight(size: frame.size, in: area, avoiding: others)
+        }
+        let (target, note) = result
+        if abs(target.x - frame.minX) < 1, abs(target.y - frame.minY) < 1 { return "，\(note)" }
+        return StickiesAX.move(window, to: target) ? "，\(note)" : "（没能挪动位置）"
+    }
+
+    /// 从右上角往下排，一列排满往左再起一列，跳过已有便笺占着的位置；都占满了就在右上角依次错开
+    static func topRight(size: CGSize, in area: CGRect, avoiding others: [CGRect]) -> (CGPoint, String) {
+        let rows = max(1, Int((area.height - 2 * margin + gap) / (size.height + gap)))
+        for column in 0..<maxColumns {
+            for row in 0..<rows {
+                let origin = CGPoint(x: area.maxX - margin - size.width - CGFloat(column) * (size.width + gap),
+                                     y: area.minY + margin + CGFloat(row) * (size.height + gap))
+                let slot = CGRect(origin: origin, size: size)
+                guard area.contains(slot) else { continue }
+                if !others.contains(where: { $0.insetBy(dx: 4, dy: 4).intersects(slot) }) {
+                    return (origin, "放在右上角")
+                }
+            }
+        }
+        let corner = CGPoint(x: area.maxX - margin - size.width, y: area.minY + margin)
+        return (cascade(from: corner, size: size, in: area, avoiding: others, dx: -step), "放在右上角（排满了，错开放）")
+    }
+
+    /// 从 start 开始每次往下挪 step、横向挪 dx，直到这里没有别的便笺（左上角挨得很近就算占着）；到屏幕边就绕回去
+    static func cascade(from start: CGPoint, size: CGSize, in area: CGRect, avoiding others: [CGRect], dx: CGFloat) -> CGPoint {
+        var point = clamp(start, size: size, in: area)
+        for _ in 0..<64 {
+            if !others.contains(where: { abs($0.minX - point.x) < 8 && abs($0.minY - point.y) < 8 }) { break }
+            point.x += dx
+            point.y += step
+            if point.y + size.height > area.maxY { point.y = area.minY + margin }
+            if point.x + size.width > area.maxX { point.x = area.minX + margin }
+            if point.x < area.minX { point.x = area.maxX - margin - size.width }
+        }
+        return clamp(point, size: size, in: area)
+    }
+
+    static func clamp(_ point: CGPoint, size: CGSize, in area: CGRect) -> CGPoint {
+        CGPoint(x: min(max(point.x, area.minX), max(area.minX, area.maxX - size.width)),
+                y: min(max(point.y, area.minY), max(area.minY, area.maxY - size.height)))
+    }
+
+    /// 便笺所在屏幕去掉菜单栏和程序坞后的区域，换成辅助功能坐标（原点在主屏左上角，y 往下）
+    static func visibleArea(around frame: CGRect) -> CGRect? {
+        let screens = NSScreen.screens
+        guard let primary = screens.first else { return nil }
+        let flip = { (r: CGRect) -> CGRect in
+            CGRect(x: r.minX, y: primary.frame.maxY - r.maxY, width: r.width, height: r.height)
+        }
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        let screen = screens.first { flip($0.frame).contains(center) } ?? NSScreen.main ?? primary
+        return flip(screen.visibleFrame)
     }
 }
 
@@ -701,10 +801,34 @@ final class Inbox {
         }
         do {
             try fm.moveItem(at: file, to: destination)
+            // 记下归档的时间，到期清理以它为准
+            try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: destination.path)
         } catch {
             finished.insert(key)
             logLine("归档失败（不会重复贴）：\(file.lastPathComponent) · \(error.localizedDescription)")
         }
+    }
+
+    /// 删掉「已处理」里归档早于 cutoff 的原文，返回删了几个。只动 Binsen 自己归档的文本文件。
+    func cleanUpArchive(before cutoff: Date) -> Int {
+        let fm = FileManager.default
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .creationDateKey, .contentModificationDateKey]
+        guard let entries = try? fm.contentsOfDirectory(at: archiveURL, includingPropertiesForKeys: Array(keys),
+                                                         options: [.skipsHiddenFiles]) else { return 0 }
+        var removed = 0
+        for entry in entries where acceptedExtensions.contains(entry.pathExtension.lowercased()) {
+            guard let values = try? entry.resourceValues(forKeys: keys), values.isDirectory != true else { continue }
+            let stamp = [values.creationDate, values.contentModificationDate].compactMap { $0 }.max() ?? Date()
+            guard stamp < cutoff else { continue }
+            do {
+                try fm.removeItem(at: entry)
+                removed += 1
+            } catch {
+                let name = entry.lastPathComponent
+                DispatchQueue.main.async { logLine("清理失败：\(name) · \(error.localizedDescription)") }
+            }
+        }
+        return removed
     }
 
     private func requestDownload(placeholder: URL) {
@@ -732,6 +856,7 @@ final class RemindersInbox {
     private var pasted: Set<String> = []                     // 已贴出、但标记完成失败的，避免重复贴
     private var failures: [String: (count: Int, retryAt: Date)] = [:]
     private var observer: NSObjectProtocol?
+    private var warnedCustomList = false
 
     static func requestAccess(_ store: EKEventStore, _ done: @escaping (Bool) -> Void) {
         let finish: (Bool, Error?) -> Void = { granted, error in
@@ -888,6 +1013,38 @@ final class RemindersInbox {
         }
     }
 
+    /// 删掉列表里完成时间早于 cutoff 的提醒事项（贴成便笺后被标记为已完成的原文）。
+    /// 列表是自己指定的（不是默认的 Binsen）时，只有明确设置过 KeepDays 才清理，免得删掉你自己的已完成事项。
+    func cleanUp(before cutoff: Date) {
+        guard authorized else { return }
+        guard remindersListName == "Binsen" || settings.object(forKey: "KeepDays") != nil else {
+            if !warnedCustomList {
+                warnedCustomList = true
+                logLine("提醒事项：列表「\(remindersListName)」是自己指定的，不自动清理里面的已完成项；需要清理就设置 KeepDays")
+            }
+            return
+        }
+        guard let list = RemindersInbox.findList(store) else { return }
+        let predicate = store.predicateForCompletedReminders(withCompletionDateStarting: nil, ending: cutoff,
+                                                             calendars: [list])
+        _ = store.fetchReminders(matching: predicate) { [weak self] reminders in
+            DispatchQueue.main.async {
+                guard let self, let reminders, !reminders.isEmpty else { return }
+                var removed = 0
+                for reminder in reminders {
+                    if (try? self.store.remove(reminder, commit: false)) != nil { removed += 1 }
+                }
+                do {
+                    try self.store.commit()
+                    logLine("清理：删除了提醒事项「\(remindersListName)」里 \(removed) 条完成超过 \(keepDays) 天的原文")
+                } catch {
+                    self.store.reset()
+                    logLine("清理提醒事项失败：\(describe(error))")
+                }
+            }
+        }
+    }
+
     /// --remind：往列表里加一条，用来自检整条提醒事项通道
     static func addForTest(_ text: String) -> Bool {
         let store = EKEventStore()
@@ -925,6 +1082,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var ticks = 0
     var watcher: FolderWatcher?
     var activity: NSObjectProtocol?
+    var cleanupTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         trimLogIfNeeded()
@@ -963,6 +1121,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer.tolerance = 0.5
         self.timer = timer
 
+        // 已处理的原文到期自动删除：启动 1 分钟后先清一次，之后每 6 小时一次
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self] in self?.cleanUp() }
+        let cleanupTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            self?.cleanUp()
+        }
+        cleanupTimer.tolerance = 600
+        self.cleanupTimer = cleanupTimer
+
         let center = NSWorkspace.shared.notificationCenter
         _ = center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
             Power.willSleep()
@@ -977,6 +1143,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             _ = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.inbox.scanSoon() }
         }
+    }
+
+    /// 删掉放了超过 KeepDays 天的原文：iCloud 云盘「已处理」里的文件、提醒事项列表里已完成的条目
+    func cleanUp() {
+        let days = keepDays
+        guard days > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 24 * 3600)
+        let inbox = self.inbox
+        DispatchQueue.global(qos: .utility).async {
+            let removed = inbox.cleanUpArchive(before: cutoff)
+            guard removed > 0 else { return }
+            DispatchQueue.main.async { logLine("清理：删除了「\(archiveFolderName)」里 \(removed) 个超过 \(days) 天的原文") }
+        }
+        reminders?.cleanUp(before: cutoff)
     }
 
     func checkAccessibility() {

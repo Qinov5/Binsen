@@ -14,40 +14,45 @@ iPhone 捷徑「Binsen」
   └─ 舊版：存成 .txt ──▶ iCloud 雲碟/捷徑/Binsen
                         └─ Mac 背景常駐的 Binsen 收到新內容
                               ├─ 靜默在「便條紙」中新增一張並寫入內容
-                              └─ 提醒事項標記為已完成；檔案歸檔至 Binsen/已处理
+                              └─ 提醒事項標記為已完成；檔案歸檔至 Binsen/已处理（30 天後自動刪除）
 ```
 
 ## 為什麼做它
 
 * **純正原生**：直接寫入 macOS 內建的「便條紙」App，不是第三方仿製的浮動視窗。
-* **零打擾寫入**：全程在背景操作，不搶走目前視窗的焦點，在 Mac 上打字不會被突然打斷；若「便條紙」尚未執行，會自動沿用它啟動時自帶的預設空白便條，絕不多留一張廢紙。
-* **乾淨無痕**：完全不讀寫、不汙染系統剪貼板。
+* **零打擾寫入**：全程在背景操作，不搶走目前視窗的焦點，在 Mac 上打字不會被突然打斷；新便條從螢幕右上角依序往下排，不會蓋住已有的便條；若「便條紙」尚未執行，會自動沿用它啟動時自帶的預設空白便條，絕不多留一張廢紙。
+* **乾淨無痕**：完全不讀寫、不汙染系統剪貼板；貼出後的原文 30 天後自動從 iCloud 刪除。
 * **零外部依賴**：不需要伺服器、不需要註冊帳號、不開放任何網路連接埠，只用你自己的 iCloud（提醒事項或 iCloud 雲碟）同步。
 * **極簡透明**：核心邏輯只有單一 Swift 檔案，沒有任何第三方依賴，程式碼一目了然。
 
 ## 環境需求
 
-* macOS 13 或更新版本
-* Xcode 或命令列工具（可透過 `xcode-select --install` 安裝）
+* macOS 13 或更新版本（Apple 晶片和 Intel 皆可）
 * Mac 與 iPhone 登入同一個 Apple 帳號，並在 iCloud 中開啟 **提醒事項**（使用舊版檔案方式時還需開啟 **iCloud 雲碟**）
 
 ## 快速開始
 
 ### 1. Mac 端安裝
 
+打開「終端機」，貼上下面這一行並按 Return：
+
 ```bash
-git clone https://github.com/Qinov5/Binsen.git
-cd Binsen
-zsh install.sh
+curl -fsSL https://raw.githubusercontent.com/Qinov5/Binsen/main/install.sh | zsh
 ```
 
-安裝腳本會自動完成：**編譯建置 → 安裝至 `~/Applications/Binsen.app` → 建立 iCloud 收件匣資料夾 → 註冊登入時自動啟動 → 分別自我檢測 iCloud 雲碟通道與提醒事項通道**。
+不用安裝 Xcode，也不用編譯。安裝腳本會自動完成：**下載打包好的 Binsen → 安裝至 `~/Applications/Binsen.app` → 建立 iCloud 收件匣資料夾 → 註冊登入時自動啟動 → 分別自我檢測 iCloud 雲碟通道與提醒事項通道**。
 
 看到桌面便條紙跳出 **「Binsen 已接通 ✅」** 和 **「Binsen 提醒事项通道已接通 ✅」**，就代表安裝成功。
 
-> **日常更新**：在專案資料夾下執行 `git pull && zsh install.sh` 即可覆蓋更新。
+> **日常更新**：再執行一次上面那行指令即可覆蓋更新。
 >
-> **關於簽署**：腳本會優先使用鑰匙圈中的 `Apple Development` 憑證簽署（首次執行時若系統詢問是否允許 `codesign` 取用鑰匙圈，選擇「永遠允許」即可），這樣之後更新不會遺失系統授權；若沒有開發者憑證，則改用臨時簽署，每次更新後都需要重新授權一次。
+> **關於簽署**：下載的安裝包是臨時簽署，每次更新後可能需要重新授權一次（腳本自我檢測時會提示並打開設定頁面）。
+>
+> **從原始碼編譯**（需要 Xcode 或命令列工具，`xcode-select --install`）：
+> ```bash
+> git clone https://github.com/Qinov5/Binsen.git && cd Binsen && zsh install.sh
+> ```
+> 之後在專案資料夾執行 `git pull && zsh install.sh` 更新。腳本會優先使用鑰匙圈中的 `Apple Development` 憑證簽署（首次執行若詢問是否允許 `codesign` 取用鑰匙圈，選「永遠允許」），這樣更新後不會遺失系統授權。
 >
 > **介面語言**：安裝腳本與執行記錄的訊息目前為簡體中文。
 
@@ -62,7 +67,7 @@ zsh install.sh
 
 *註：不授權也能使用。此時程式會自動改用系統服務（Make Sticky）建立便條，但新增時會把「便條紙」帶到最前面，且便條紙未執行時可能會多出一張空白便條。*
 
-**提醒事項權限**：安裝過程中會跳出視窗請求取用「提醒事項」，請點「允許」。Binsen 只讀寫「Binsen」這一個列表（沒有的話會自動在 iCloud 建立），貼成便條後會把那則提醒事項標記為已完成。如果漏點了，到 `系統設定 → 隱私權與安全性 → 提醒事項` 開啟 Binsen，再重新執行 `zsh install.sh`。
+**提醒事項權限**：安裝過程中會跳出視窗請求取用「提醒事項」，請點「允許」。Binsen 只讀寫「Binsen」這一個列表（沒有的話會自動在 iCloud 建立），貼成便條後會把那則提醒事項標記為已完成。如果漏點了，到 `系統設定 → 隱私權與安全性 → 提醒事項` 開啟 Binsen，再重新執行一次安裝指令。
 
 ### 3. iPhone 端設定捷徑
 
@@ -111,6 +116,13 @@ defaults write io.github.qinov5.binsen RemindersList "某個列表"
 # 關閉提醒事項通道，只用 iCloud 雲碟檔案
 defaults write io.github.qinov5.binsen UseReminders -bool false
 
+# 新便條的位置：預設從螢幕右上角往下排、不蓋住已有便條；在便條紙預設位置依序往右下錯開用 cascade，不移動用 off
+defaults write io.github.qinov5.binsen NotePlacement cascade
+
+# 已貼出的原文保留幾天：到期自動刪除「已处理」裡的檔案和提醒事項裡的已完成項目（預設 30；0 = 一直保留）
+# RemindersList 改成你自己的列表時，只有設定了這一項才會清理那個列表
+defaults write io.github.qinov5.binsen KeepDays -int 7
+
 # 修改設定後重新啟動背景服務
 launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 ```
@@ -132,8 +144,10 @@ launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 ## 解除安裝
 
 ```bash
-zsh uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/Qinov5/Binsen/main/uninstall.sh | zsh
 ```
+
+（在專案資料夾裡也可以直接執行 `zsh uninstall.sh`。）
 
 解除安裝腳本只會移除背景程式與自動啟動設定，**iCloud 收件匣資料夾、提醒事項裡的「Binsen」列表及桌面上已有的所有便條都會完整保留**。
 
@@ -143,13 +157,18 @@ zsh uninstall.sh
 * **提醒事項通道**：透過 EventKit 監聽「Binsen」列表的變化（另外每分鐘主動重新整理一次），讀到新的提醒事項後貼成便條，再標記為已完成。提醒事項走 CloudKit，iPhone 會立即上傳；捷徑存下的檔案則要等 iCloud 雲碟擇機上傳。
 * **按需下載雲端檔案**：剛從 iPhone 同步過來的 `.txt` 在 Mac 上可能只是尚未下載的佔位檔。程式透過 `setiopolicy_np` 開啟按需下載，遇到尚未就緒的檔案還會主動呼叫 `brctl download` 觸發下載。讀取在背景執行緒進行，某個檔案下載較慢，也不會耽誤其他便條。
 * **無感寫入**：讀取文字後，透過輔助使用介面直接觸發便條紙選單列的「新增便條」（`⌘N`）並填入內容，全程不啟用便條紙視窗；若便條紙未在執行，則在背景靜默啟動並直接寫入它的初始空白便條；若未獲授權，則平順降級至 `NSPerformService("Make Sticky", …)` 並盡量歸還焦點。
+* **擺放與清理**：新便條寫好後，透過輔助使用介面移到螢幕右上角的空位（一欄排滿就往左再排一欄，都滿了就在右上角依序錯開）。貼出後的原文保留 30 天，之後自動從「已处理」資料夾和提醒事項中刪除。
+* **打包發佈**：發佈 Release 時，GitHub Actions 會編譯 Apple 晶片與 Intel 通用版本，打包成 Binsen.zip 附在 Release 上，一行安裝指令下載的就是它。
 
 ```text
-Sources/main.swift   核心監聽與寫入邏輯（單一檔案、無依賴）
-Info.plist           背景無介面 App 設定
-Icon/                App 圖示（AppIcon.svg 為原始檔；安裝時依系統版本選用 .icns）
-install.sh           編譯、簽署、安裝、自動啟動與端對端自我檢測（可重複執行以更新）
-uninstall.sh         移除 App 與自動啟動服務
+Sources/main.swift           核心監聽與寫入邏輯（單一檔案、無依賴）
+Info.plist                   背景無介面 App 設定
+Binsen.entitlements          以 Developer ID 簽署、公證時的權限宣告
+Icon/                        App 圖示（AppIcon.svg 為原始檔；依系統版本選用 .icns）
+install.sh                   下載或編譯、安裝、自動啟動與端對端自我檢測（可重複執行以更新）
+uninstall.sh                 移除 App 與自動啟動服務
+scripts/package.sh           打包發佈用的通用安裝包
+.github/workflows/build.yml  每次推送都編譯一次；發佈 Release 時自動附上安裝包
 ```
 
 ## 授權條款

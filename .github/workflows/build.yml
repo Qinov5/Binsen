@@ -1,0 +1,68 @@
+# 每次推送到 main 都在 macOS 上编译一遍；发布 Release 时，把打包好的安装包挂到那个 Release 上，
+# 一行安装命令（install.sh）下载的就是这里的 Binsen.zip / Binsen-legacy.zip。
+#
+# 可选：在仓库 Settings → Secrets and variables → Actions 里添加下面几项，就会改用开发者证书签名并公证：
+#   SIGNING_CERT_P12        Developer ID Application 证书导出的 .p12，转成 base64
+#   SIGNING_CERT_PASSWORD   这个 .p12 的密码
+#   NOTARY_APPLE_ID / NOTARY_TEAM_ID / NOTARY_PASSWORD（App 专用密码）
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    paths-ignore: ['**.md']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 给哪个 Release 补传安装包（如 v0.7.0）
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+      SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: 导入签名证书（可选）
+        if: env.SIGNING_CERT_P12 != ''
+        env:
+          SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          printf '%s' "$SIGNING_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          IDENTITY=$(security find-identity -p codesigning "$KEYCHAIN" | awk -F'"' '/^ *1\)/ {print $2; exit}')
+          test -n "$IDENTITY"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: 编译并打包
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: zsh scripts/package.sh
+
+      - name: 挂到 Release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" dist/Binsen.zip dist/Binsen-legacy.zip dist/SHA256SUMS.txt --clobber

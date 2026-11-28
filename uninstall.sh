@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Binsen · 卸载（保留 iCloud 里的 Binsen 文件夹和已有便笺）
+# Binsen · 卸载（保留 iCloud 里的 Binsen 文件夹、提醒事项列表和已有便笺）
+# 没有下载项目时：curl -fsSL https://raw.githubusercontent.com/Qinov5/Binsen/main/uninstall.sh | zsh
 ID=io.github.qinov5.binsen
 launchctl bootout "gui/$(id -u)/$ID" 2>/dev/null
 pkill -x Binsen 2>/dev/null

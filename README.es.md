@@ -14,40 +14,46 @@ Atajo «Binsen» en el iPhone
   └─ versión antigua: se guarda como .txt ──▶ iCloud Drive/Atajos/Binsen
                         └─ Binsen, en segundo plano en el Mac, recibe el texto
                               ├─ crea en silencio una nota nueva en Stickies y escribe el texto
-                              └─ marca el recordatorio como completado; el archivo va a Binsen/已处理
+                              └─ marca el recordatorio como completado; el archivo va a Binsen/已处理 (se borra a los 30 días)
 ```
 
 ## Por qué existe
 
 * **Totalmente nativo**: escribe directamente en la app **Stickies** integrada en macOS, no en una ventana flotante que la imita.
-* **Sin interrupciones**: todo ocurre en segundo plano y nunca roba el foco de la ventana activa, así que puedes seguir escribiendo en el Mac. Si Stickies no está abierta, Binsen la inicia y reutiliza la nota en blanco que crea al arrancar, sin dejar notas vacías de más.
+* **Sin interrupciones**: todo ocurre en segundo plano y nunca roba el foco de la ventana activa, así que puedes seguir escribiendo en el Mac. Las notas nuevas se colocan desde la esquina superior derecha hacia abajo, sin tapar las que ya tienes. Si Stickies no está abierta, Binsen la inicia y reutiliza la nota en blanco que crea al arrancar, sin dejar notas vacías de más.
 * **No toca tu portapapeles**: ni lo lee ni lo modifica.
+* **No deja rastro**: el texto original que ya se pegó se borra de iCloud a los 30 días.
 * **Cero dependencias externas**: sin servidor, sin registro de cuenta y sin puertos de red abiertos; todo se sincroniza a través de tu propio iCloud (Recordatorios o iCloud Drive).
 * **Mínimo y auditable**: toda la lógica está en un único archivo Swift, sin dependencias de terceros.
 
 ## Requisitos
 
-* macOS 13 o posterior
-* Xcode o las herramientas de línea de comandos (`xcode-select --install`)
+* macOS 13 o posterior (Apple silicon o Intel)
 * El Mac y el iPhone con la misma cuenta de Apple y **Recordatorios** activado en iCloud (para la versión antigua con archivos, también **iCloud Drive**)
 
 ## Primeros pasos
 
 ### 1. Instalar en el Mac
 
+Abre **Terminal**, pega esta línea y pulsa Retorno:
+
 ```bash
-git clone https://github.com/Qinov5/Binsen.git
-cd Binsen
-zsh install.sh
+curl -fsSL https://raw.githubusercontent.com/Qinov5/Binsen/main/install.sh | zsh
 ```
 
-El script de instalación se encarga de todo: **compila la app → la instala en `~/Applications/Binsen.app` → crea la carpeta de entrada en iCloud → registra el inicio automático al iniciar sesión → prueba por separado el canal de iCloud Drive y el de Recordatorios**.
+No necesitas Xcode ni compilar nada. El script de instalación se encarga de todo: **descarga Binsen ya compilado → lo instala en `~/Applications/Binsen.app` → crea la carpeta de entrada en iCloud → registra el inicio automático al iniciar sesión → prueba por separado el canal de iCloud Drive y el de Recordatorios**.
 
 Si en el escritorio aparecen las notas **«Binsen 已接通 ✅»** («Binsen conectado») y **«Binsen 提醒事项通道已接通 ✅»** («canal de Recordatorios conectado»), la instalación ha salido bien.
 
-> **Actualizar**: en la carpeta del proyecto, ejecuta `git pull && zsh install.sh`.
+> **Actualizar**: vuelve a ejecutar la misma línea.
 >
-> **Sobre la firma**: el script usa primero el certificado `Apple Development` de tu llavero (si la primera vez macOS pregunta si `codesign` puede acceder al llavero, elige «Permitir siempre»); así los permisos se conservan entre actualizaciones. Si no tienes certificado de desarrollador, usa una firma ad hoc y tendrás que volver a conceder el permiso después de cada actualización.
+> **Sobre la firma**: la versión descargada lleva una firma ad hoc, así que después de cada actualización puede que tengas que volver a conceder el permiso (la prueba del script te avisa y abre los ajustes).
+>
+> **Compilar desde el código fuente** (requiere Xcode o las herramientas de línea de comandos, `xcode-select --install`):
+> ```bash
+> git clone https://github.com/Qinov5/Binsen.git && cd Binsen && zsh install.sh
+> ```
+> Para actualizar, ejecuta `git pull && zsh install.sh` en la carpeta del proyecto. El script usa primero el certificado `Apple Development` de tu llavero (si macOS pregunta si `codesign` puede acceder al llavero, elige «Permitir siempre»), así los permisos se conservan entre actualizaciones.
 >
 > **Idioma**: por ahora, los mensajes del script de instalación y del registro están solo en chino simplificado.
 
@@ -62,7 +68,7 @@ La primera vez que se ejecuta la prueba, macOS pide permiso de control. Basta co
 
 *Nota: Binsen también funciona sin este permiso. En ese caso usa el servicio del sistema (Make Sticky), que trae Stickies al frente al crear la nota y, si Stickies no estaba abierta, puede dejar una nota en blanco de más.*
 
-**Permiso de Recordatorios**: durante la instalación aparecerá un aviso para acceder a **Recordatorios**; haz clic en **Permitir**. Binsen solo lee y escribe en la lista «Binsen» (si no existe, la crea en iCloud) y, después de pegar cada recordatorio como nota, lo marca como completado. Si no lo concediste, ve a `Ajustes del Sistema → Privacidad y seguridad → Recordatorios`, activa Binsen y vuelve a ejecutar `zsh install.sh`.
+**Permiso de Recordatorios**: durante la instalación aparecerá un aviso para acceder a **Recordatorios**; haz clic en **Permitir**. Binsen solo lee y escribe en la lista «Binsen» (si no existe, la crea en iCloud) y, después de pegar cada recordatorio como nota, lo marca como completado. Si no lo concediste, ve a `Ajustes del Sistema → Privacidad y seguridad → Recordatorios`, activa Binsen y vuelve a ejecutar el comando de instalación.
 
 ### 3. Añadir el atajo en el iPhone
 
@@ -111,6 +117,14 @@ defaults write io.github.qinov5.binsen RemindersList "otra-lista"
 # Desactivar el canal de Recordatorios y usar solo archivos de iCloud Drive
 defaults write io.github.qinov5.binsen UseReminders -bool false
 
+# Posición de las notas nuevas: por defecto, desde la esquina superior derecha hacia abajo sin tapar las que ya tienes;
+# cascade las escalona hacia abajo y a la derecha desde la posición por defecto de Stickies; off no las mueve
+defaults write io.github.qinov5.binsen NotePlacement cascade
+
+# Días que se conserva el texto original ya pegado: al vencer se borran los archivos de 已处理 y los recordatorios completados (por defecto 30; 0 = conservar siempre)
+# Si cambiaste RemindersList a una lista tuya, esa lista solo se limpia si defines este valor
+defaults write io.github.qinov5.binsen KeepDays -int 7
+
 # Reiniciar el servicio en segundo plano para aplicar los cambios
 launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 ```
@@ -132,8 +146,10 @@ launchctl kickstart -k gui/$(id -u)/io.github.qinov5.binsen
 ## Desinstalar
 
 ```bash
-zsh uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/Qinov5/Binsen/main/uninstall.sh | zsh
 ```
+
+(Dentro de la carpeta del proyecto también puedes ejecutar `zsh uninstall.sh`.)
 
 El script solo elimina la app en segundo plano y su inicio automático. **La carpeta de entrada de iCloud, la lista «Binsen» de Recordatorios y todas las notas que ya tienes en el escritorio se conservan.**
 
@@ -143,13 +159,18 @@ El script solo elimina la app en segundo plano y su inicio automático. **La car
 * **Canal de Recordatorios**: con EventKit vigila los cambios en la lista «Binsen» (y además pide una actualización cada minuto); al leer un recordatorio nuevo lo pega como nota y lo marca como completado. Los Recordatorios se sincronizan con CloudKit, así que el iPhone los sube al instante; en cambio, los archivos que guarda el atajo dependen de cuándo decida subirlos iCloud Drive.
 * **Descarga bajo demanda**: un `.txt` recién sincronizado desde el iPhone puede ser, en el Mac, solo un marcador de posición todavía sin descargar. El programa activa la descarga bajo demanda con `setiopolicy_np` y, si el archivo aún no está listo, la solicita con `brctl download`. La lectura se hace en un hilo en segundo plano, así que un archivo que tarda en descargarse no retrasa a los demás.
 * **Escritura invisible**: tras leer el texto, usa la API de accesibilidad para pulsar «Nueva nota» (`⌘N`) en el menú de Stickies y escribir el contenido, sin activar la ventana de Stickies. Si Stickies no está abierta, la inicia en segundo plano y escribe en su nota inicial en blanco. Sin permiso, recurre a `NSPerformService("Make Sticky", …)` e intenta devolver el foco.
+* **Colocación y limpieza**: una vez escrita la nota, la mueve con la API de accesibilidad al primer hueco libre de la esquina superior derecha (cuando una columna se llena empieza otra a la izquierda; si todo está ocupado, las escalona en esa esquina). El texto original pegado se guarda 30 días y después se borra solo de la carpeta 已处理 y de Recordatorios.
+* **Paquetes listos**: al publicar un Release, GitHub Actions compila una versión universal (Apple silicon e Intel) y la adjunta como Binsen.zip; es lo que descarga el comando de instalación de una línea.
 
 ```text
-Sources/main.swift   lógica de vigilancia y escritura (un solo archivo, sin dependencias)
-Info.plist           configuración de la app en segundo plano sin interfaz
-Icon/                icono de la app (AppIcon.svg es el original; install.sh elige el .icns según la versión de macOS)
-install.sh           compilación, firma, instalación, inicio automático y prueba de extremo a extremo (se puede repetir para actualizar)
-uninstall.sh         elimina la app y el servicio de inicio automático
+Sources/main.swift           lógica de vigilancia y escritura (un solo archivo, sin dependencias)
+Info.plist                   configuración de la app en segundo plano sin interfaz
+Binsen.entitlements          permisos declarados al firmar y notarizar con Developer ID
+Icon/                        icono de la app (AppIcon.svg es el original; se elige el .icns según la versión de macOS)
+install.sh                   descarga o compilación, instalación, inicio automático y prueba de extremo a extremo (se puede repetir para actualizar)
+uninstall.sh                 elimina la app y el servicio de inicio automático
+scripts/package.sh           crea el paquete universal para publicar
+.github/workflows/build.yml  compila en cada push y adjunta el paquete al publicar un Release
 ```
 
 ## Licencia

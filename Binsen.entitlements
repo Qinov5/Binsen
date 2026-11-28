@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 只在用 Developer ID 签名、开启 Hardened Runtime（公证必需）时使用，见 scripts/package.sh -->
+<plist version="1.0">
+<dict>
+	<!-- 读写提醒事项：EventKit 的提醒事项也归在「日历」这一项 -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<!-- 没有控制「便笺」的权限时，备用方式要通过 AppleScript 新建便笺并粘贴 -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>
